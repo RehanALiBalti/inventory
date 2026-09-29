@@ -3,9 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 8012",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 8012",
     "lint": "next lint",
     "bootstrap-admin": "npx ts-node --project tsconfig.scripts.json scripts/bootstrap-admin.ts",
     "seed-defaults": "npx ts-node --project tsconfig.scripts.json scripts/seed-defaults.ts"
