@@ -1,0 +1,70 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Helper functions for checking shop permissions
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return request.auth != null && getUserData().role == 'admin';
+    }
+
+    function hasShopPermission(shopId, permission) {
+      let user = getUserData();
+      return user.role == 'admin' || (
+        user.shopPermissions != null && 
+        user.shopPermissions[shopId] != null && 
+        user.shopPermissions[shopId][permission] == true
+      );
+    }
+
+    // Products: need view permission for the shop
+    match /products/{productId} {
+      allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
+      allow write: if isAdmin();
+    }
+
+    // Warehouses: need view permission for the shop
+    match /warehouses/{warehouseId} {
+      allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
+      allow write: if isAdmin();
+    }
+
+    // Stock Balances: need view permission for the shop
+    match /stockBalances/{balanceId} {
+      allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
+      allow write: if isAdmin(); // Writes happen via adminDb
+    }
+
+    // Stock Movements: need view permission for the shop
+    match /stockMovements/{movementId} {
+      allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
+      allow write: if isAdmin(); // Writes happen via adminDb
+    }
+
+    // Shops
+    match /shops/{shopId} {
+      allow read: if request.auth != null && hasShopPermission(shopId, 'view');
+      allow write: if isAdmin();
+    }
+
+    // Users
+    match /users/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow write: if isAdmin(); 
+    }
+
+    // Audit logs
+    match /auditLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
