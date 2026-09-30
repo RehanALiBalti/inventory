@@ -71,15 +71,22 @@ export async function POST(request: NextRequest) {
 
     // Execute stock receive in a transaction
     const movementId = await adminDb.runTransaction(async (txn) => {
+      // Step 1: Execute ALL reads first
+      const balanceRefs = lineItems.map(item => {
+        const balanceId = `${warehouseId}_${item.productId}`;
+        return adminDb.collection('stockBalances').doc(balanceId);
+      });
+      const balanceDocs = await Promise.all(balanceRefs.map(ref => txn.get(ref)));
+
+      // Step 2: Perform all writes
       const movementRef = adminDb.collection('stockMovements').doc();
       const movementLineItems = [];
 
       for (let i = 0; i < lineItems.length; i++) {
         const item = lineItems[i];
         const productData = productDocs[i].data()!;
-        const balanceId = `${warehouseId}_${item.productId}`;
-        const balanceRef = adminDb.collection('stockBalances').doc(balanceId);
-        const balanceDoc = await txn.get(balanceRef);
+        const balanceRef = balanceRefs[i];
+        const balanceDoc = balanceDocs[i];
 
         const currentQty = balanceDoc.exists ? balanceDoc.data()!.quantity : 0;
         const newQty = currentQty + item.quantity;

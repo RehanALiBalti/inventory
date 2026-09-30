@@ -96,18 +96,54 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Low stock products
-    const productsSnap = await adminDb.collection('products').where('active', '==', true).get();
-    let lowStockProducts = 0;
+    // Low stock products for this shop
+    const productsSnap = await adminDb.collection('products')
+      .where('shopId', '==', shopId)
+      .where('active', '==', true)
+      .get();
+
+    // Map balances
+    const allShopBalancesSnap = await adminDb.collection('stockBalances')
+      .where('shopId', '==', shopId)
+      .get();
+
+    const shopStockByProd: Record<string, number> = {};
+    const whStockByProd: Record<string, number> = {};
+
+    allShopBalancesSnap.docs.forEach(doc => {
+      const d = doc.data();
+      const pId = d.productId as string;
+      const qty = Number(d.quantity) || 0;
+      if (d.locationType === 'shop' || d.locationId === shopId) {
+        shopStockByProd[pId] = (shopStockByProd[pId] || 0) + qty;
+      } else if (d.locationType === 'warehouse' || linkedWarehouseIds.includes(d.locationId)) {
+        whStockByProd[pId] = (whStockByProd[pId] || 0) + qty;
+      }
+    });
+
+    const lowStockItems: Array<{
+      id: string;
+      name: string;
+      sku: string;
+      currentQty: number;
+      threshold: number;
+      warehouseQty: number;
+    }> = [];
+
     for (const prodDoc of productsSnap.docs) {
       const prodData = prodDoc.data();
-      if (prodData.lowStockThreshold != null && prodData.lowStockThreshold > 0) {
-        // Check balance at shop
-        const balanceId = `${shopId}_${prodDoc.id}`;
-        const balDoc = await adminDb.collection('stockBalances').doc(balanceId).get();
-        const qty = balDoc.exists ? balDoc.data()!.quantity : 0;
-        if (qty <= prodData.lowStockThreshold) {
-          lowStockProducts++;
+      const threshold = prodData.lowStockThreshold ?? 10;
+      if (threshold > 0) {
+        const currentQty = shopStockByProd[prodDoc.id] || 0;
+        if (currentQty <= threshold) {
+          lowStockItems.push({
+            id: prodDoc.id,
+            name: prodData.name,
+            sku: prodData.sku,
+            currentQty,
+            threshold,
+            warehouseQty: whStockByProd[prodDoc.id] || 0,
+          });
         }
       }
     }
@@ -121,7 +157,8 @@ export async function GET(request: NextRequest) {
         todayReceived,
         todayTransferred,
         todaySold,
-        lowStockProducts,
+        lowStockProducts: lowStockItems.length,
+        lowStockItems,
         linkedWarehouses: linkedWarehouseIds.length,
       },
     });

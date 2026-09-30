@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
 import { DataTable, Badge, Button, Modal, Input, Alert, SearchInput } from '@/components/ui';
@@ -95,7 +96,17 @@ export default function AdminProductsPage() {
     <div className="animate-fade-in">
       <div className="flex justify-between items-start mb-6">
         <PageHeader title="Products" description="Manage product catalog" />
-        <Button onClick={() => openModal()}>Add Product</Button>
+        <div className="flex items-center gap-3">
+          <Link href={`/shop/${shopId}/import`}>
+            <Button variant="secondary">
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              Import Excel
+            </Button>
+          </Link>
+          <Button onClick={() => openModal()}>+ Add Product</Button>
+        </div>
       </div>
 
       {error && <Alert variant="error" onDismiss={() => setError(null)} className="mb-4">{error}</Alert>}

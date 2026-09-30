@@ -76,17 +76,18 @@ export async function POST(request: NextRequest) {
 
     // Execute sale in a transaction
     const movementId = await adminDb.runTransaction(async (txn) => {
-      const movementRef = adminDb.collection('stockMovements').doc();
-      const movementLineItems = [];
+      // Step 1: Execute ALL reads first
+      const balanceRefs = lineItems.map(item => {
+        const balanceId = `${shopId}_${item.productId}`;
+        return adminDb.collection('stockBalances').doc(balanceId);
+      });
+      const balanceDocs = await Promise.all(balanceRefs.map(ref => txn.get(ref)));
 
+      // Step 2: Validate all stock availability before writing
       for (let i = 0; i < lineItems.length; i++) {
         const item = lineItems[i];
         const productData = productDocs[i].data()!;
-
-        // Check shop stock
-        const balanceId = `${shopId}_${item.productId}`;
-        const balanceRef = adminDb.collection('stockBalances').doc(balanceId);
-        const balanceDoc = await txn.get(balanceRef);
+        const balanceDoc = balanceDocs[i];
         const currentQty = balanceDoc.exists ? balanceDoc.data()!.quantity : 0;
 
         if (currentQty < item.quantity) {
@@ -94,7 +95,18 @@ export async function POST(request: NextRequest) {
             `Insufficient stock for ${productData.name}: available ${currentQty}, requested ${item.quantity}`
           );
         }
+      }
 
+      // Step 3: Perform all writes
+      const movementRef = adminDb.collection('stockMovements').doc();
+      const movementLineItems = [];
+
+      for (let i = 0; i < lineItems.length; i++) {
+        const item = lineItems[i];
+        const productData = productDocs[i].data()!;
+        const balanceRef = balanceRefs[i];
+        const balanceDoc = balanceDocs[i];
+        const currentQty = balanceDoc.exists ? balanceDoc.data()!.quantity : 0;
         const newQty = currentQty - item.quantity;
 
         // Update balance

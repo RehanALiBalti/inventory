@@ -93,30 +93,48 @@ export async function POST(request: NextRequest) {
 
     // Execute transfer in a transaction
     const movementId = await adminDb.runTransaction(async (txn) => {
+      // Step 1: Execute ALL reads first
+      const sourceBalanceRefs = lineItems.map(item => {
+        const sourceBalanceId = `${sourceWarehouseId}_${item.productId}`;
+        return adminDb.collection('stockBalances').doc(sourceBalanceId);
+      });
+      const destBalanceRefs = lineItems.map(item => {
+        const destBalanceId = `${destShopId}_${item.productId}`;
+        return adminDb.collection('stockBalances').doc(destBalanceId);
+      });
+
+      const [sourceBalanceDocs, destBalanceDocs] = await Promise.all([
+        Promise.all(sourceBalanceRefs.map(ref => txn.get(ref))),
+        Promise.all(destBalanceRefs.map(ref => txn.get(ref)))
+      ]);
+
+      // Step 2: Validate all stock availability before writing
+      for (let i = 0; i < lineItems.length; i++) {
+        const item = lineItems[i];
+        const productData = productDocs[i].data()!;
+        const sourceBalanceDoc = sourceBalanceDocs[i];
+        const sourceQty = sourceBalanceDoc.exists ? sourceBalanceDoc.data()!.quantity : 0;
+
+        if (sourceQty < item.quantity) {
+          throw new Error(
+            `Insufficient stock for ${productData.name}: available ${sourceQty}, requested ${item.quantity}`
+          );
+        }
+      }
+
+      // Step 3: Perform all writes
       const movementRef = adminDb.collection('stockMovements').doc();
       const movementLineItems = [];
 
       for (let i = 0; i < lineItems.length; i++) {
         const item = lineItems[i];
         const productData = productDocs[i].data()!;
+        const sourceBalanceRef = sourceBalanceRefs[i];
+        const sourceBalanceDoc = sourceBalanceDocs[i];
+        const destBalanceRef = destBalanceRefs[i];
+        const destBalanceDoc = destBalanceDocs[i];
 
-        // Source balance (warehouse)
-        const sourceBalanceId = `${sourceWarehouseId}_${item.productId}`;
-        const sourceBalanceRef = adminDb.collection('stockBalances').doc(sourceBalanceId);
-        const sourceBalanceDoc = await txn.get(sourceBalanceRef);
         const sourceQty = sourceBalanceDoc.exists ? sourceBalanceDoc.data()!.quantity : 0;
-
-        // Check sufficient stock
-        if (sourceQty < item.quantity) {
-          throw new Error(
-            `Insufficient stock for ${productData.name}: available ${sourceQty}, requested ${item.quantity}`
-          );
-        }
-
-        // Destination balance (shop)
-        const destBalanceId = `${destShopId}_${item.productId}`;
-        const destBalanceRef = adminDb.collection('stockBalances').doc(destBalanceId);
-        const destBalanceDoc = await txn.get(destBalanceRef);
         const destQty = destBalanceDoc.exists ? destBalanceDoc.data()!.quantity : 0;
 
         const newSourceQty = sourceQty - item.quantity;
@@ -129,7 +147,6 @@ export async function POST(request: NextRequest) {
             updatedAt: FieldValue.serverTimestamp(),
           });
         } else {
-          // Should not happen if stock exists, but handle gracefully
           txn.set(sourceBalanceRef, {
             productId: item.productId,
             productName: productData.name,

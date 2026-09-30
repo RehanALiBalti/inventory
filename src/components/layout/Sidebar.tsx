@@ -123,20 +123,26 @@ export function AppSidebar({ shopId, shopName }: SidebarProps) {
 
   const shopPrefix = shopId ? `/shop/${shopId}` : '';
 
-  const navItems: NavItem[] = [
-    { label: 'Dashboard', href: `${shopPrefix}/dashboard`, icon: Icons.dashboard },
-    { label: 'Shop Stock', href: `${shopPrefix}/stock`, icon: Icons.inventory },
+  const dashboardItem: NavItem = {
+    label: 'Dashboard',
+    href: `${shopPrefix}/dashboard`,
+    icon: Icons.dashboard,
+  };
+
+  const warehouseItems: NavItem[] = [
     { label: 'Warehouse Stock', href: `${shopPrefix}/warehouse-stock`, icon: Icons.warehouse },
     { label: 'Transfers', href: `${shopPrefix}/transfers`, icon: Icons.transfer },
-    { label: 'Sales', href: `${shopPrefix}/sales`, icon: Icons.sale },
-    { label: 'History', href: `${shopPrefix}/history`, icon: Icons.activity },
+    { label: 'Warehouses', href: `${shopPrefix}/warehouses`, icon: Icons.warehouse, adminOnly: true },
   ];
 
-  const shopAdminItems: NavItem[] = [
-    { label: 'Stock Received', href: `${shopPrefix}/stock-received`, icon: Icons.received, adminOnly: true },
-    { label: 'Products', href: `${shopPrefix}/products`, icon: Icons.products, adminOnly: true },
-    { label: 'Import Products', href: `${shopPrefix}/import`, icon: Icons.import, adminOnly: true },
-    { label: 'Warehouses', href: `${shopPrefix}/warehouses`, icon: Icons.warehouse, adminOnly: true },
+  const shopItems: NavItem[] = [
+    { label: 'Shop Stock', href: `${shopPrefix}/stock`, icon: Icons.inventory },
+    { label: 'Products', href: `${shopPrefix}/products`, icon: Icons.products },
+    { label: 'Sales', href: `${shopPrefix}/sales`, icon: Icons.sale },
+  ];
+
+  const historyItems: NavItem[] = [
+    { label: 'History', href: `${shopPrefix}/history`, icon: Icons.activity },
   ];
 
   const globalAdminItems: NavItem[] = [
@@ -204,29 +210,41 @@ export function AppSidebar({ shopId, shopName }: SidebarProps) {
       <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-1">
         {shopId && (
           <>
-            <p className="px-3 text-[10px] font-semibold text-surface-400 uppercase tracking-widest mb-2">
-              Shop
-            </p>
-            {navItems.map(renderNavLink)}
-          </>
-        )}
+            {renderNavLink(dashboardItem)}
 
-        {shopId && isAdmin && (
-          <>
-            <div className="my-4 border-t border-surface-200/30" />
-            <p className="px-3 text-[10px] font-semibold text-surface-400 uppercase tracking-widest mb-2">
-              Shop Admin
-            </p>
-            {shopAdminItems.map(renderNavLink)}
+            {/* Warehouse Group */}
+            <div className="pt-4 pb-1">
+              <p className="px-3 text-[10px] font-bold text-surface-400 uppercase tracking-widest">
+                Warehouse
+              </p>
+            </div>
+            {warehouseItems.filter(item => !item.adminOnly || isAdmin).map(renderNavLink)}
+
+            {/* Shop Group */}
+            <div className="pt-4 pb-1">
+              <p className="px-3 text-[10px] font-bold text-surface-400 uppercase tracking-widest">
+                Shop
+              </p>
+            </div>
+            {shopItems.filter(item => !item.adminOnly || isAdmin).map(renderNavLink)}
+
+            {/* History Group */}
+            <div className="pt-4 pb-1">
+              <p className="px-3 text-[10px] font-bold text-surface-400 uppercase tracking-widest">
+                History
+              </p>
+            </div>
+            {historyItems.map(renderNavLink)}
           </>
         )}
 
         {isAdmin && (
           <>
-            <div className="my-4 border-t border-surface-200/30" />
-            <p className="px-3 text-[10px] font-semibold text-surface-400 uppercase tracking-widest mb-2">
-              Global Admin
-            </p>
+            <div className="pt-4 pb-1 border-t border-surface-200/40 mt-3">
+              <p className="px-3 text-[10px] font-bold text-surface-400 uppercase tracking-widest">
+                Global Admin
+              </p>
+            </div>
             {globalAdminItems.map(renderNavLink)}
           </>
         )}
