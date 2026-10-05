@@ -5,8 +5,11 @@ import { useParams } from 'next/navigation';
 import { useAuth, useHasShopPermission } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
-import { Button, Input, Select, Alert, Card, ConfirmDialog, SearchInput, EmptyState, DataTable, Badge } from '@/components/ui';
+import { Button, Input, Select, Alert, Card, ConfirmDialog, SearchInput, EmptyState, DataTable, Badge, Modal } from '@/components/ui';
 import { v4 as uuidv4 } from 'uuid';
+import { downloadTransferPdf, downloadAllTransfersRecordPdf } from '@/lib/pdf/generatePdf';
+import { fetchAllMovements } from '@/lib/fetchAllMovements';
+import { ReverseModal } from '@/components/stock/ReverseModal';
 
 interface ProductOption {
   id: string;
@@ -46,6 +49,8 @@ interface Movement {
   destLocationName: string;
   actorName: string;
   recordedAt: string;
+  occurredAt?: string;
+  notes?: string;
   reversed: boolean;
 }
 
@@ -70,7 +75,17 @@ export default function TransfersPage() {
   const [submitting, setSubmitting] = useState(false);
   const [history, setHistory] = useState<Movement[]>([]);
   const [histLoading, setHistLoading] = useState(true);
+  const [shopName, setShopName] = useState('Shop');
+  const [exportingAll, setExportingAll] = useState(false);
   const [tab, setTab] = useState<'new' | 'history'>('new');
+
+  // Post-transfer PDF modal
+  const [postTransferModalOpen, setPostTransferModalOpen] = useState(false);
+  const [lastTransferRecord, setLastTransferRecord] = useState<Movement | null>(null);
+
+  // Reversal Modal
+  const [reverseModalOpen, setReverseModalOpen] = useState(false);
+  const [selectedReverseMovement, setSelectedReverseMovement] = useState<Movement | null>(null);
 
   useEffect(() => {
     loadData();
@@ -78,13 +93,18 @@ export default function TransfersPage() {
 
   const loadData = async () => {
     setLoading(true);
-    const [prodRes, whRes] = await Promise.all([
+    const [prodRes, whRes, shopRes] = await Promise.all([
       apiFetch<ProductOption[]>(`/api/products?shopId=${shopId}`),
       apiFetch<WarehouseData[]>(`/api/warehouses?shopId=${shopId}`),
+      apiFetch<{ id: string; name: string }[]>('/api/shops'),
     ]);
 
     if (prodRes.success && prodRes.data) setProducts(prodRes.data);
     if (whRes.success && whRes.data) setWarehouses(whRes.data);
+    if (shopRes.success && shopRes.data) {
+      const current = shopRes.data.find((s) => s.id === shopId);
+      if (current) setShopName(current.name);
+    }
     setLoading(false);
 
     // Load history
@@ -144,7 +164,7 @@ export default function TransfersPage() {
     setError(null);
     setSuccess(null);
 
-    const res = await apiFetch('/api/stock/transfer', {
+    const res = await apiFetch<{ movementId: string }>('/api/stock/transfer', {
       method: 'POST',
       body: JSON.stringify({
         sourceWarehouseId: selectedWarehouse,
@@ -156,6 +176,20 @@ export default function TransfersPage() {
     });
 
     if (res.success) {
+      const whObj = warehouses.find(w => w.id === selectedWarehouse);
+      const newRecord: Movement = {
+        id: res.data?.movementId || uuidv4(),
+        type: 'warehouse_to_shop_transfer',
+        lineItems: [...lineItems],
+        sourceLocationName: whObj?.name || 'Warehouse',
+        destLocationName: shop?.name || 'Shop',
+        actorName: userRecord?.fullName || 'Staff',
+        recordedAt: new Date().toISOString(),
+        notes: notes.trim() || undefined,
+        reversed: false,
+      };
+      setLastTransferRecord(newRecord);
+      setPostTransferModalOpen(true);
       setSuccess('Transfer completed successfully!');
       setLineItems([]);
       setNotes('');
@@ -167,6 +201,49 @@ export default function TransfersPage() {
       setConfirmOpen(false);
     }
     setSubmitting(false);
+  };
+
+  const handleDownloadAllTransfers = async () => {
+    setExportingAll(true);
+    setError(null);
+    const { items, error: loadError } = await fetchAllMovements<Movement>(
+      `/api/stock/movements?shopId=${shopId}&type=warehouse_to_shop_transfer`
+    );
+    setExportingAll(false);
+    if (loadError) {
+      setError(loadError);
+      return;
+    }
+    if (items.length === 0) {
+      setError('No transfer records to download.');
+      return;
+    }
+    await downloadAllTransfersRecordPdf(shopName, items);
+  };
+
+  const handleDownloadTransfer = (m: Movement) => {
+    downloadTransferPdf({
+      id: m.id,
+      sourceLocationName: m.sourceLocationName || 'Warehouse',
+      destLocationName: m.destLocationName || shop?.name || 'Shop',
+      actorName: m.actorName || 'Staff',
+      recordedAt: m.recordedAt,
+      occurredAt: m.occurredAt,
+      lineItems: m.lineItems,
+      notes: m.notes,
+      reversed: m.reversed,
+    });
+  };
+
+  const handleOpenReverse = (m: Movement) => {
+    setSelectedReverseMovement(m);
+    setReverseModalOpen(true);
+  };
+
+  const handleReversalSuccess = () => {
+    setSuccess('Transfer reversed successfully! Warehouse stock restored and shop stock deducted.');
+    loadWarehouseBalances();
+    loadHistory();
   };
 
   const filteredProducts = products.filter(p =>
@@ -213,11 +290,51 @@ export default function TransfersPage() {
     { key: 'status', header: 'Status', render: (m: Movement) => (
       m.reversed ? <Badge variant="danger">Reversed</Badge> : <Badge variant="success">Active</Badge>
     )},
+    { key: 'actions', header: 'Actions', render: (m: Movement) => (
+      <div className="flex items-center gap-1.5 justify-end">
+        <button
+          onClick={() => handleDownloadTransfer(m)}
+          title="Download transfer note PDF"
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-surface-100 hover:bg-surface-200 text-surface-800 transition-colors"
+        >
+          <svg className="w-3.5 h-3.5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          PDF Note
+        </button>
+        {!m.reversed && (
+          <button
+            onClick={() => handleOpenReverse(m)}
+            title="Reverse / Void this transfer"
+            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-danger-600 hover:bg-danger-50 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+            </svg>
+            Reverse
+          </button>
+        )}
+      </div>
+    )},
   ];
 
   return (
     <div className="animate-fade-in">
-      <PageHeader title="Transfers" description="Transfer stock from warehouse to this shop" />
+      <PageHeader
+        title="Transfers"
+        description="Transfer stock from warehouse to this shop"
+        actions={
+          <Button
+            variant="secondary"
+            size="sm"
+            loading={exportingAll}
+            onClick={handleDownloadAllTransfers}
+            title="Download every transfer record as one PDF"
+          >
+            Download all PDF
+          </Button>
+        }
+      />
 
       {/* Tab selector */}
       <div className="flex gap-2 mb-6">
@@ -354,6 +471,96 @@ export default function TransfersPage() {
         message={`Transfer ${lineItems.length} product(s) from warehouse to shop? This will deduct warehouse stock and add to shop stock.`}
         confirmLabel="Confirm Transfer"
         loading={submitting}
+      />
+
+      {/* Post-Transfer Document Modal */}
+      <Modal
+        open={postTransferModalOpen}
+        onClose={() => setPostTransferModalOpen(false)}
+        title="Transfer Completed Successfully"
+        maxWidth="sm"
+      >
+        <div className="space-y-4 py-2">
+          <div className="text-center space-y-2">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+              <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h4 className="text-base font-bold text-surface-900">Transfer Gate Pass Ready</h4>
+            <p className="text-xs text-surface-500">
+              The transfer has been recorded in the ledger. Download the transfer note PDF to this device.
+            </p>
+          </div>
+
+          {lastTransferRecord && (
+            <div className="bg-surface-50 p-3 rounded-xl border border-surface-200 text-xs space-y-1">
+              <div className="flex justify-between text-surface-500">
+                <span>Transfer Ref:</span>
+                <span className="font-mono font-bold text-surface-800">
+                  TRF-{lastTransferRecord.id.slice(-8).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex justify-between text-surface-500">
+                <span>Route:</span>
+                <span className="font-medium text-surface-800">
+                  {lastTransferRecord.sourceLocationName} &rarr; {lastTransferRecord.destLocationName}
+                </span>
+              </div>
+              <div className="flex justify-between text-surface-500">
+                <span>Items:</span>
+                <span className="font-medium text-surface-800">
+                  {lastTransferRecord.lineItems.length} products (
+                  {lastTransferRecord.lineItems.reduce((acc, li) => acc + li.quantity, 0)} units)
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2 pt-2">
+            <Button
+              className="w-full shadow-md"
+              onClick={() => {
+                if (lastTransferRecord) handleDownloadTransfer(lastTransferRecord);
+              }}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Download Transfer Note (PDF)
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  setPostTransferModalOpen(false);
+                  setTab('new');
+                }}
+              >
+                + New Transfer
+              </Button>
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={() => {
+                  setPostTransferModalOpen(false);
+                  setTab('history');
+                }}
+              >
+                View History
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reversal Confirmation Modal */}
+      <ReverseModal
+        open={reverseModalOpen}
+        onClose={() => setReverseModalOpen(false)}
+        movement={selectedReverseMovement}
+        onSuccess={handleReversalSuccess}
       />
     </div>
   );

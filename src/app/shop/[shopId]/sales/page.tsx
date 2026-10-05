@@ -17,6 +17,9 @@ import {
   LoadingSpinner,
 } from '@/components/ui';
 import { v4 as uuidv4 } from 'uuid';
+import { downloadSaleReceiptPdf, downloadDailySalesPdf, downloadAllSalesRecordPdf } from '@/lib/pdf/generatePdf';
+import { fetchAllMovements } from '@/lib/fetchAllMovements';
+import { ReverseModal } from '@/components/stock/ReverseModal';
 
 interface ProductOption {
   id: string;
@@ -39,12 +42,14 @@ interface Balance {
 
 interface Movement {
   id: string;
+  type?: string;
   lineItems: { productName: string; quantity: number }[];
   actorName: string;
   recordedAt: string;
   occurredAt: string;
   reversed: boolean;
   notes?: string;
+  sourceLocationName?: string;
 }
 
 export default function SalesPage() {
@@ -53,6 +58,7 @@ export default function SalesPage() {
   const canSell = useHasShopPermission(shopId, 'recordSale');
 
   // Main data states
+  const [shopName, setShopName] = useState('Shop Store');
   const [products, setProducts] = useState<ProductOption[]>([]);
   const [shopBalances, setShopBalances] = useState<Balance[]>([]);
   const [history, setHistory] = useState<Movement[]>([]);
@@ -75,17 +81,35 @@ export default function SalesPage() {
   const [productSearch, setProductSearch] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // Post-sale instant PDF receipt state
+  const [postSaleModalOpen, setPostSaleModalOpen] = useState(false);
+  const [lastSaleReceipt, setLastSaleReceipt] = useState<Movement | null>(null);
+
+  // Daily Sales Summary state
+  const [daySaleDate, setDaySaleDate] = useState(new Date().toISOString().slice(0, 10));
+
+  const [exportingAll, setExportingAll] = useState(false);
+
+  // Reversal Modal state
+  const [reverseModalOpen, setReverseModalOpen] = useState(false);
+  const [selectedReverseMovement, setSelectedReverseMovement] = useState<Movement | null>(null);
+
   useEffect(() => {
     loadData();
   }, [shopId]);
 
   const loadData = async () => {
-    const [prodRes, balRes] = await Promise.all([
+    const [prodRes, balRes, shopRes] = await Promise.all([
       apiFetch<ProductOption[]>(`/api/products?shopId=${shopId}`),
       apiFetch<Balance[]>(`/api/stock/balances?shopId=${shopId}&locationType=shop`),
+      apiFetch<{ id: string; name: string }[]>(`/api/shops`),
     ]);
     if (prodRes.success && prodRes.data) setProducts(prodRes.data);
     if (balRes.success && balRes.data) setShopBalances(balRes.data);
+    if (shopRes.success && shopRes.data) {
+      const currentShop = shopRes.data.find((s) => s.id === shopId);
+      if (currentShop) setShopName(currentShop.name);
+    }
     loadHistory();
   };
 
@@ -161,7 +185,7 @@ export default function SalesPage() {
     setModalError(null);
     setError(null);
 
-    const res = await apiFetch('/api/stock/sale', {
+    const res = await apiFetch<{ movementId: string }>('/api/stock/sale', {
       method: 'POST',
       body: JSON.stringify({
         shopId,
@@ -175,6 +199,21 @@ export default function SalesPage() {
     if (res.success) {
       setSuccess('Sale recorded successfully! Stock deducted from shop inventory.');
       setRecordModalOpen(false);
+
+      // Create local movement for immediate PDF receipt download
+      const newRecord: Movement = {
+        id: res.data?.movementId || uuidv4(),
+        lineItems: [...lineItems],
+        actorName: 'Cashier / Staff',
+        recordedAt: new Date().toISOString(),
+        occurredAt: new Date(saleDate).toISOString(),
+        notes: notes.trim() || undefined,
+        reversed: false,
+        sourceLocationName: shopName,
+      };
+      setLastSaleReceipt(newRecord);
+      setPostSaleModalOpen(true);
+
       // Reload balances & history
       const balRes = await apiFetch<Balance[]>(`/api/stock/balances?shopId=${shopId}&locationType=shop`);
       if (balRes.success && balRes.data) setShopBalances(balRes.data);
@@ -183,6 +222,101 @@ export default function SalesPage() {
       setModalError(res.error || 'Failed to record sale');
     }
     setSubmitting(false);
+  };
+
+  // PDF Handlers
+  const handleDownloadReceipt = (m: Movement) => {
+    downloadSaleReceiptPdf({
+      id: m.id,
+      shopName: m.sourceLocationName || shopName || 'Shop Store',
+      actorName: m.actorName || 'Staff',
+      occurredAt: m.occurredAt,
+      recordedAt: m.recordedAt,
+      lineItems: m.lineItems,
+      notes: m.notes,
+      reversed: m.reversed,
+    });
+  };
+
+  const handleDownloadAllSales = async () => {
+    setExportingAll(true);
+    setError(null);
+    const { items, error: loadError } = await fetchAllMovements<Movement>(
+      `/api/stock/movements?shopId=${shopId}&type=sale`
+    );
+    setExportingAll(false);
+    if (loadError) {
+      setError(loadError);
+      return;
+    }
+    if (items.length === 0) {
+      setError('No sales records to download.');
+      return;
+    }
+    await downloadAllSalesRecordPdf(shopName, items);
+  };
+
+  const handleDownloadDaySales = async () => {
+    setError(null);
+    const { items, error: loadError } = await fetchAllMovements<Movement>(
+      `/api/stock/movements?shopId=${shopId}&type=sale`
+    );
+    if (loadError) {
+      setError(loadError);
+      return;
+    }
+    const daySales = items.filter((m) => {
+      const raw = m.occurredAt || m.recordedAt;
+      if (!raw) return false;
+      const d = new Date(raw);
+      const local = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      return local === daySaleDate;
+    });
+
+    if (daySales.length === 0) {
+      setError(`No sales found recorded for ${new Date(daySaleDate).toLocaleDateString([], { dateStyle: 'medium' })}`);
+      return;
+    }
+
+    const prodMap = new Map<string, { productName: string; totalQuantity: number }>();
+    daySales
+      .filter((s) => !s.reversed)
+      .forEach((s) => {
+        s.lineItems?.forEach((li) => {
+          const prev = prodMap.get(li.productName);
+          if (prev) {
+            prev.totalQuantity += li.quantity;
+          } else {
+            prodMap.set(li.productName, { productName: li.productName, totalQuantity: li.quantity });
+          }
+        });
+      });
+
+    downloadDailySalesPdf({
+      shopName,
+      dateStr: new Date(daySaleDate).toLocaleDateString([], { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }),
+      sales: daySales.map((s) => ({
+        id: s.id,
+        time: s.occurredAt ? new Date(s.occurredAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '-',
+        actorName: s.actorName || 'Staff',
+        itemsSummary: s.lineItems?.map((li) => `${li.productName} ×${li.quantity}`).join(', ') || '-',
+        totalUnits: s.lineItems?.reduce((acc, li) => acc + (li.quantity || 0), 0) || 0,
+        reversed: s.reversed,
+        notes: s.notes,
+      })),
+      productSummary: Array.from(prodMap.values()),
+    });
+  };
+
+  // Reversal Handlers
+  const handleOpenReverse = (m: Movement) => {
+    setSelectedReverseMovement(m);
+    setReverseModalOpen(true);
+  };
+
+  const handleReversalSuccess = () => {
+    setSuccess('Transaction reversed successfully! Inventory has been restored.');
+    loadData();
   };
 
   // Filter products for modal search
@@ -296,23 +430,87 @@ export default function SalesPage() {
           <Badge variant="success">Active</Badge>
         ),
     },
+    {
+      key: 'actions',
+      header: 'Actions',
+      render: (m: Movement) => (
+        <div className="flex items-center gap-1.5 justify-end">
+          <button
+            onClick={() => handleDownloadReceipt(m)}
+            title="Download PDF receipt"
+            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium bg-surface-100 hover:bg-surface-200 text-surface-800 transition-colors"
+          >
+            <svg className="w-3.5 h-3.5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            PDF
+          </button>
+          {!m.reversed && (
+            <button
+              onClick={() => handleOpenReverse(m)}
+              title="Reverse / Void this sale"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium text-danger-600 hover:bg-danger-50 transition-colors"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+              Reverse
+            </button>
+          )}
+        </div>
+      ),
+    },
   ];
 
   return (
     <div className="animate-fade-in space-y-6">
-      {/* Top Header with title and prominent Record Sale button */}
+      {/* Top Header with title, Day Sales PDF export, and prominent Record Sale button */}
       <PageHeader
         title="Sales"
         description="View and record inventory sold from this shop"
         actions={
-          canSell ? (
-            <Button onClick={handleOpenModal} className="shadow-sm">
-              <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Daily Sales PDF Download */}
+            <button
+              onClick={handleDownloadAllSales}
+              disabled={exportingAll}
+              title="Download every sales record as one PDF"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold bg-white border border-surface-200 text-surface-800 shadow-sm hover:bg-surface-50 disabled:opacity-50"
+            >
+              <svg className="w-3.5 h-3.5 text-primary-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
               </svg>
-              Record Sale
-            </Button>
-          ) : undefined
+              {exportingAll ? 'Preparing PDF...' : 'Download all PDF'}
+            </button>
+            <div className="flex items-center gap-1.5 bg-white border border-surface-200 rounded-xl px-2.5 py-1.5 shadow-sm">
+              <span className="text-xs text-surface-500 font-medium">Day:</span>
+              <input
+                type="date"
+                value={daySaleDate}
+                onChange={(e) => setDaySaleDate(e.target.value)}
+                className="text-xs font-semibold bg-transparent text-surface-800 outline-none"
+              />
+              <button
+                onClick={handleDownloadDaySales}
+                title="Download this day's sales as a PDF"
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-semibold bg-primary-50 text-primary-700 hover:bg-primary-100 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                </svg>
+                Day Sale PDF
+              </button>
+            </div>
+
+            {canSell && (
+              <Button onClick={handleOpenModal} className="shadow-sm">
+                <svg className="w-4 h-4 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                </svg>
+                Record Sale
+              </Button>
+            )}
+          </div>
         }
       />
 
@@ -618,6 +816,87 @@ export default function SalesPage() {
           </div>
         </form>
       </Modal>
+
+      {/* Post-Sale Receipt & Actions Modal */}
+      <Modal
+        open={postSaleModalOpen}
+        onClose={() => setPostSaleModalOpen(false)}
+        title="Sale Completed Successfully"
+        maxWidth="sm"
+      >
+        <div className="space-y-4 py-2">
+          <div className="text-center space-y-2">
+            <div className="w-12 h-12 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto">
+              <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <h4 className="text-base font-bold text-surface-900">Sale Document Ready</h4>
+            <p className="text-xs text-surface-500">
+              The sale was recorded and stock has been deducted. Download the PDF receipt to this device.
+            </p>
+          </div>
+
+          {lastSaleReceipt && (
+            <div className="bg-surface-50 p-3 rounded-xl border border-surface-200 text-xs space-y-1">
+              <div className="flex justify-between text-surface-500">
+                <span>Receipt Ref:</span>
+                <span className="font-mono font-bold text-surface-800">
+                  RCP-{lastSaleReceipt.id.slice(-8).toUpperCase()}
+                </span>
+              </div>
+              <div className="flex justify-between text-surface-500">
+                <span>Items:</span>
+                <span className="font-medium text-surface-800">
+                  {lastSaleReceipt.lineItems.length} products (
+                  {lastSaleReceipt.lineItems.reduce((acc, li) => acc + li.quantity, 0)} units)
+                </span>
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-2 pt-2">
+            <Button
+              className="w-full shadow-md"
+              onClick={() => {
+                if (lastSaleReceipt) handleDownloadReceipt(lastSaleReceipt);
+              }}
+            >
+              <svg className="w-4 h-4 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+              Download PDF Receipt
+            </Button>
+            <div className="flex gap-2">
+              <Button
+                variant="secondary"
+                className="flex-1"
+                onClick={() => {
+                  setPostSaleModalOpen(false);
+                  handleOpenModal();
+                }}
+              >
+                + Record Another
+              </Button>
+              <Button
+                variant="ghost"
+                className="flex-1"
+                onClick={() => setPostSaleModalOpen(false)}
+              >
+                Done
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Reversal Confirmation Modal */}
+      <ReverseModal
+        open={reverseModalOpen}
+        onClose={() => setReverseModalOpen(false)}
+        movement={selectedReverseMovement}
+        onSuccess={handleReversalSuccess}
+      />
     </div>
   );
 }

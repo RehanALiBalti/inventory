@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { adminDb } from '@/lib/firebase/admin';
-import { requireAdmin } from '@/lib/auth/verify';
+import { requireAuth, hasShopPermission } from '@/lib/auth/verify';
 import { FieldValue } from 'firebase-admin/firestore';
 import { validateRequired, ValidationException, validationErrorResponse } from '@/lib/validation';
 
-// POST /api/stock/reverse - Reverse a committed movement (admin only)
+// POST /api/stock/reverse - Reverse a committed movement (admin or authorized shop staff)
 export async function POST(request: NextRequest) {
   try {
-    const admin = await requireAdmin(request);
+    const user = await requireAuth(request);
     const body = await request.json();
 
     try {
@@ -44,6 +44,23 @@ export async function POST(request: NextRequest) {
     }
 
     const original = originalDoc.data()!;
+
+    // Permission check: Admin can reverse any movement; Staff can reverse within permitted shop or own movements
+    const isAdmin = user.role === 'admin';
+    const shopId = original.shopId || original.sourceLocationId || original.destLocationId;
+    const isActor = original.actorUid === user.uid;
+    const hasShopPerm = shopId ? (
+      original.type === 'sale'
+        ? hasShopPermission(user, shopId, 'recordSale')
+        : hasShopPermission(user, shopId, 'transfer')
+    ) : false;
+
+    if (!isAdmin && !hasShopPerm && !isActor) {
+      return NextResponse.json(
+        { success: false, error: 'You do not have permission to reverse this transaction. Contact an administrator.' },
+        { status: 403 }
+      );
+    }
 
     // Check if already reversed
     if (original.reversed) {
@@ -138,8 +155,8 @@ export async function POST(request: NextRequest) {
         destLocationName: original.sourceLocationName || null,
         destLocationType: original.sourceLocationType || null,
         shopScope: original.shopScope || null,
-        actorUid: admin.uid,
-        actorName: admin.fullName,
+        actorUid: user.uid,
+        actorName: user.fullName,
         recordedAt: FieldValue.serverTimestamp(),
         occurredAt: FieldValue.serverTimestamp(),
         notes: reason.trim(),
@@ -151,8 +168,8 @@ export async function POST(request: NextRequest) {
       const auditRef = adminDb.collection('auditLogs').doc();
       txn.set(auditRef, {
         action: 'reversal',
-        actorUid: admin.uid,
-        actorName: admin.fullName,
+        actorUid: user.uid,
+        actorName: user.fullName,
         targetType: 'movement',
         targetId: movementId,
         movementId: reversalRef.id,

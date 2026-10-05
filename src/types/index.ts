@@ -249,6 +249,7 @@ export interface ApiResponse<T = unknown> {
   data?: T;
   error?: string;
   details?: string[];
+  nextCursor?: string | null;
 }
 
 // ---------------------------------------------------------------------------
