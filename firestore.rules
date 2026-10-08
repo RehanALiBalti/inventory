@@ -21,6 +21,96 @@ service cloud.firestore {
       );
     }
 
+    function isApproved() {
+      return request.auth != null && getUserData().status == 'approved';
+    }
+
+    function staffCan(shopId, permission) {
+      let user = getUserData();
+      return isApproved() && (
+        user.role == 'admin' || (
+          user.shopPermissions.keys().hasAll([shopId]) &&
+          user.shopPermissions[shopId].view == true &&
+          user.shopPermissions[shopId][permission] == true
+        )
+      );
+    }
+
+    function onlyQuantityTouch() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity', 'updatedAt'])
+        && request.resource.data.quantity is number
+        && (
+          request.resource.data.quantity >= 0
+          || (
+            resource.data.locationType == 'warehouse'
+            && request.resource.data.quantity < resource.data.quantity
+          )
+        );
+    }
+
+    function itemQty(items, index, productId) {
+      return items.size() > index && items[index].productId == productId ? items[index].quantity : 0;
+    }
+
+    function lineQty(items, productId) {
+      return itemQty(items, 0, productId) + itemQty(items, 1, productId) + itemQty(items, 2, productId)
+        + itemQty(items, 3, productId) + itemQty(items, 4, productId) + itemQty(items, 5, productId)
+        + itemQty(items, 6, productId) + itemQty(items, 7, productId) + itemQty(items, 8, productId)
+        + itemQty(items, 9, productId) + itemQty(items, 10, productId) + itemQty(items, 11, productId)
+        + itemQty(items, 12, productId) + itemQty(items, 13, productId) + itemQty(items, 14, productId)
+        + itemQty(items, 15, productId) + itemQty(items, 16, productId) + itemQty(items, 17, productId)
+        + itemQty(items, 18, productId) + itemQty(items, 19, productId);
+    }
+
+    function reversalBalanceTouch() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['quantity', 'updatedAt', 'reversalMovementId'])
+        && request.resource.data.quantity is number
+        && (
+          request.resource.data.quantity >= 0
+          || resource.data.locationType == 'warehouse'
+        )
+        && request.resource.data.reversalMovementId is string
+        && request.resource.data.reversalMovementId.size() > 8
+        && request.resource.data.reversalMovementId.size() < 80;
+    }
+
+    function reversalLinked() {
+      let rev = get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data;
+      let original = get(/databases/$(database)/documents/stockMovements/$(rev.originalMovementId)).data;
+      let qty = lineQty(original.lineItems, resource.data.productId);
+      return rev.type == 'reversal'
+        && rev.actorUid == request.auth.uid
+        && rev.actorName == getUserData().fullName
+        && rev.shopId == resource.data.shopId
+        && original.reversed == true
+        && original.reversalMovementId == request.resource.data.reversalMovementId
+        && original.shopId == resource.data.shopId
+        && qty > 0
+        && (
+          (
+            original.type == 'sale'
+            && resource.data.locationType == 'shop'
+            && resource.data.locationId == original.sourceLocationId
+            && staffCan(resource.data.shopId, 'recordSale')
+            && request.resource.data.quantity == resource.data.quantity + qty
+          ) || (
+            original.type == 'warehouse_to_shop_transfer'
+            && staffCan(resource.data.shopId, 'transfer')
+            && (
+              (
+                resource.data.locationType == 'warehouse'
+                && resource.data.locationId == original.sourceLocationId
+                && request.resource.data.quantity == resource.data.quantity + qty
+              ) || (
+                resource.data.locationType == 'shop'
+                && resource.data.locationId == original.destLocationId
+                && request.resource.data.quantity == resource.data.quantity - qty
+              )
+            )
+          )
+        );
+    }
+
     // Products: need view permission for the shop
     match /products/{productId} {
       allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
@@ -33,16 +123,114 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Stock Balances: need view permission for the shop
+    // Stock Balances: staff may move quantity for a sale or a warehouse-to-shop transfer.
+    // A transfer may take warehouse quantity below zero. Receiving stock stays admin-only.
+    // A missing shop balance must still be readable so a transfer can create it.
     match /stockBalances/{balanceId} {
-      allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
-      allow write: if isAdmin(); // Writes happen via adminDb
+      allow get: if request.auth != null && (
+        !exists(/databases/$(database)/documents/stockBalances/$(balanceId)) ||
+        hasShopPermission(resource.data.shopId, 'view')
+      );
+      allow list: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
+      allow create: if isAdmin() || (
+        staffCan(request.resource.data.shopId, 'transfer') &&
+        request.resource.data.locationType == 'shop' &&
+        request.resource.data.locationId == request.resource.data.shopId &&
+        request.resource.data.quantity is number &&
+        request.resource.data.quantity > 0
+      ) || (
+        staffCan(request.resource.data.shopId, 'transfer') &&
+        request.resource.data.locationType == 'warehouse' &&
+        request.resource.data.quantity is number &&
+        request.resource.data.quantity < 0 &&
+        exists(/databases/$(database)/documents/warehouses/$(request.resource.data.locationId)) &&
+        get(/databases/$(database)/documents/warehouses/$(request.resource.data.locationId)).data.shopId == request.resource.data.shopId
+      );
+      allow update: if isAdmin() || (
+        onlyQuantityTouch() && (
+          (
+            resource.data.locationType == 'shop' &&
+            request.resource.data.quantity < resource.data.quantity &&
+            staffCan(resource.data.shopId, 'recordSale')
+          ) || (
+            resource.data.locationType == 'shop' &&
+            request.resource.data.quantity > resource.data.quantity &&
+            staffCan(resource.data.shopId, 'transfer')
+          ) || (
+            resource.data.locationType == 'warehouse' &&
+            request.resource.data.quantity < resource.data.quantity &&
+            staffCan(resource.data.shopId, 'transfer')
+          )
+        )
+      ) || (
+        reversalBalanceTouch() && reversalLinked()
+      );
+      allow delete: if isAdmin();
     }
 
-    // Stock Movements: need view permission for the shop
+    // Stock Movements: staff can record a sale or a warehouse-to-shop transfer only.
     match /stockMovements/{movementId} {
       allow read: if request.auth != null && hasShopPermission(resource.data.shopId, 'view');
-      allow write: if isAdmin(); // Writes happen via adminDb
+      allow create: if isAdmin() || (
+        isApproved() &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.actorName == getUserData().fullName &&
+        request.resource.data.reversed == false &&
+        request.resource.data.lineItems is list &&
+        request.resource.data.lineItems.size() > 0 &&
+        request.resource.data.lineItems.size() <= 50 &&
+        (
+          (
+            request.resource.data.type == 'sale' &&
+            request.resource.data.sourceLocationType == 'shop' &&
+            request.resource.data.sourceLocationId == request.resource.data.shopId &&
+            staffCan(request.resource.data.shopId, 'recordSale')
+          ) || (
+            request.resource.data.type == 'warehouse_to_shop_transfer' &&
+            request.resource.data.sourceLocationType == 'warehouse' &&
+            request.resource.data.destLocationType == 'shop' &&
+            request.resource.data.destLocationId == request.resource.data.shopId &&
+            staffCan(request.resource.data.shopId, 'transfer')
+          ) || (
+            request.resource.data.type == 'reversal' &&
+            request.resource.data.originalMovementId is string &&
+            request.resource.data.shopId is string &&
+            request.resource.data.notes is string &&
+            request.resource.data.notes.size() >= 3 &&
+            request.resource.data.notes.size() <= 300 &&
+            request.resource.data.lineItems.size() <= 20 &&
+            exists(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)) &&
+            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversed == true &&
+            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversalMovementId == movementId &&
+            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.shopId == request.resource.data.shopId &&
+            (
+              (
+                get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'sale' &&
+                staffCan(request.resource.data.shopId, 'recordSale')
+              ) || (
+                get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'warehouse_to_shop_transfer' &&
+                staffCan(request.resource.data.shopId, 'transfer')
+              )
+            )
+          )
+        )
+      );
+      allow update: if isAdmin() || (
+        isApproved() &&
+        resource.data.reversed == false &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reversed', 'reversalMovementId']) &&
+        request.resource.data.reversed == true &&
+        request.resource.data.reversalMovementId is string &&
+        exists(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)) &&
+        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.type == 'reversal' &&
+        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.originalMovementId == movementId &&
+        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.actorUid == request.auth.uid &&
+        (
+          (resource.data.type == 'sale' && staffCan(resource.data.shopId, 'recordSale')) ||
+          (resource.data.type == 'warehouse_to_shop_transfer' && staffCan(resource.data.shopId, 'transfer'))
+        )
+      );
+      allow delete: if isAdmin();
     }
 
     // Shops
@@ -51,15 +239,54 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
-    // Users
-    match /users/{userId} {
-      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
-      allow write: if isAdmin(); 
+    function staffProfileTouch() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fullName', 'photoURL', 'updatedAt'])
+        && request.resource.data.fullName is string
+        && request.resource.data.fullName.size() >= 2
+        && request.resource.data.fullName.size() <= 80
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['photoURL'])
+          || (
+            request.resource.data.photoURL is string
+            && request.resource.data.photoURL.size() > 20
+            && request.resource.data.photoURL.size() <= 400000
+            && request.resource.data.photoURL.matches('data:image/jpeg;base64,.*')
+          )
+        );
     }
 
-    // Audit logs
+    // Users. Staff may update their own name and profile photo. Role, status, and shop access stay admin-only.
+    match /users/{userId} {
+      allow read: if request.auth != null && (request.auth.uid == userId || isAdmin());
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        request.auth != null &&
+        request.auth.uid == userId &&
+        isApproved() &&
+        staffProfileTouch()
+      );
+    }
+
+    // Audit logs: staff may append their own sale or transfer. They cannot edit history.
     match /auditLogs/{logId} {
-      allow read, write: if isAdmin();
+      allow read: if isAdmin();
+      allow create: if isAdmin() || (
+        isApproved() &&
+        request.resource.data.actorUid == request.auth.uid &&
+        request.resource.data.actorName == getUserData().fullName &&
+        (
+          (request.resource.data.action == 'sale' && staffCan(request.resource.data.shopId, 'recordSale')) ||
+          (request.resource.data.action == 'transfer' && staffCan(request.resource.data.shopId, 'transfer')) ||
+          (
+            request.resource.data.action == 'reversal' &&
+            (
+              (request.resource.data.originalType == 'sale' && staffCan(request.resource.data.shopId, 'recordSale')) ||
+              (request.resource.data.originalType == 'warehouse_to_shop_transfer' && staffCan(request.resource.data.shopId, 'transfer'))
+            )
+          )
+        )
+      );
+      allow update, delete: if isAdmin();
     }
 
     // Default deny

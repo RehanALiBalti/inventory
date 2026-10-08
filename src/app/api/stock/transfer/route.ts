@@ -108,21 +108,8 @@ export async function POST(request: NextRequest) {
         Promise.all(destBalanceRefs.map(ref => txn.get(ref)))
       ]);
 
-      // Step 2: Validate all stock availability before writing
-      for (let i = 0; i < lineItems.length; i++) {
-        const item = lineItems[i];
-        const productData = productDocs[i].data()!;
-        const sourceBalanceDoc = sourceBalanceDocs[i];
-        const sourceQty = sourceBalanceDoc.exists ? sourceBalanceDoc.data()!.quantity : 0;
-
-        if (sourceQty < item.quantity) {
-          throw new Error(
-            `Insufficient stock for ${productData.name}: available ${sourceQty}, requested ${item.quantity}`
-          );
-        }
-      }
-
-      // Step 3: Perform all writes
+      // Warehouse quantity may go negative. A later stock receipt adds onto that balance.
+      // Step 2: Perform all writes
       const movementRef = adminDb.collection('stockMovements').doc();
       const movementLineItems = [];
 

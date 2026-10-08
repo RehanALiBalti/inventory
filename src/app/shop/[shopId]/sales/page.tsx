@@ -15,6 +15,7 @@ import {
   Modal,
   StatCard,
   LoadingSpinner,
+  Pagination,
 } from '@/components/ui';
 import { v4 as uuidv4 } from 'uuid';
 import { downloadSaleReceiptPdf, downloadDailySalesPdf, downloadAllSalesRecordPdf } from '@/lib/pdf/generatePdf';
@@ -71,6 +72,8 @@ export default function SalesPage() {
   // Table filters & search
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'reversed'>('all');
+  const [page, setPage] = useState(1);
+  const [listBusy, setListBusy] = useState(false);
 
   // Modal & Form states
   const [recordModalOpen, setRecordModalOpen] = useState(false);
@@ -360,6 +363,19 @@ export default function SalesPage() {
     });
   }, [history, searchQuery, statusFilter]);
 
+  const pageSize = 10;
+  const historyPages = Math.max(1, Math.ceil(filteredHistory.length / pageSize));
+  const historyPage = Math.min(page, historyPages);
+  const historyRows = filteredHistory.slice((historyPage - 1) * pageSize, historyPage * pageSize);
+
+  const chooseStatus = (next: 'all' | 'active' | 'reversed') => {
+    if (next === statusFilter) return;
+    setStatusFilter(next);
+    setPage(1);
+    setListBusy(true);
+    window.setTimeout(() => setListBusy(false), 420);
+  };
+
   // History table columns
   const histColumns = [
     {
@@ -556,13 +572,16 @@ export default function SalesPage() {
         <div className="flex-1 max-w-md">
           <SearchInput
             value={searchQuery}
-            onChange={setSearchQuery}
+            onChange={(value) => {
+              setSearchQuery(value);
+              setPage(1);
+            }}
             placeholder="Search sales by product, staff, or notes..."
           />
         </div>
         <div className="flex items-center gap-2">
           <button
-            onClick={() => setStatusFilter('all')}
+            onClick={() => chooseStatus('all')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               statusFilter === 'all'
                 ? 'bg-surface-900 text-white'
@@ -572,7 +591,7 @@ export default function SalesPage() {
             All ({history.length})
           </button>
           <button
-            onClick={() => setStatusFilter('active')}
+            onClick={() => chooseStatus('active')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               statusFilter === 'active'
                 ? 'bg-emerald-600 text-white'
@@ -582,7 +601,7 @@ export default function SalesPage() {
             Active ({activeSales.length})
           </button>
           <button
-            onClick={() => setStatusFilter('reversed')}
+            onClick={() => chooseStatus('reversed')}
             className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
               statusFilter === 'reversed'
                 ? 'bg-danger-600 text-white'
@@ -598,9 +617,9 @@ export default function SalesPage() {
       <div className="glass-card overflow-hidden">
         <DataTable
           columns={histColumns}
-          data={filteredHistory}
+          data={historyRows}
           keyExtractor={(m) => m.id}
-          loading={histLoading}
+          loading={histLoading || listBusy}
           emptyMessage={
             searchQuery
               ? 'No sales match your search query.'
@@ -609,6 +628,7 @@ export default function SalesPage() {
               : 'No sales recorded yet.'
           }
         />
+        <Pagination page={historyPage} totalPages={historyPages} onPageChange={setPage} />
       </div>
 
       {/* Record Sale Modal */}

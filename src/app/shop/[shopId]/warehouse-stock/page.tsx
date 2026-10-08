@@ -17,7 +17,8 @@ import {
   DataTable,
   Badge,
   StatCard,
-  LoadingSpinner
+  LoadingSpinner,
+  Pagination
 } from '@/components/ui';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -94,6 +95,22 @@ export default function WarehouseStockPage() {
   const [receiptsHistory, setReceiptsHistory] = useState<Movement[]>([]);
   const [transfersHistory, setTransfersHistory] = useState<Movement[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [receiptPage, setReceiptPage] = useState(1);
+  const [transferPage, setTransferPage] = useState(1);
+  const [paneLoading, setPaneLoading] = useState(false);
+
+  const openView = (next: 'inventory' | 'receipts_history' | 'transfers_history') => {
+    if (next === viewTab) return;
+    setViewTab(next);
+    if (next === 'inventory') {
+      setPaneLoading(true);
+      window.setTimeout(() => setPaneLoading(false), 420);
+    } else {
+      setHistoryLoading(true);
+      if (next === 'receipts_history') setReceiptPage(1);
+      else setTransferPage(1);
+    }
+  };
 
   // Receive Stock Modal state
   const [receiveModalOpen, setReceiveModalOpen] = useState(false);
@@ -273,8 +290,7 @@ export default function WarehouseStockPage() {
 
   const updateTransferQty = (idx: number, qty: number) => {
     const updated = [...transferItems];
-    const max = updated[idx].maxQuantity || 999999;
-    updated[idx].quantity = Math.min(Math.max(1, qty), max);
+    updated[idx].quantity = Math.max(1, qty);
     setTransferItems(updated);
   };
 
@@ -430,9 +446,8 @@ export default function WarehouseStockPage() {
           )}
           <button
             onClick={() => handleOpenTransferWithProduct(item)}
-            disabled={item.warehouseStock <= 0}
-            title={item.warehouseStock > 0 ? 'Transfer stock to shop' : 'No warehouse stock to transfer'}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-100 text-surface-700 hover:bg-surface-200 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            title="Transfer stock to shop. Warehouse quantity can go negative."
+            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-surface-100 text-surface-700 hover:bg-surface-200 transition-colors"
           >
             <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
@@ -443,6 +458,9 @@ export default function WarehouseStockPage() {
       ),
     },
   ];
+
+  const receiptPages = Math.max(1, Math.ceil(receiptsHistory.length / 10));
+  const transferPages = Math.max(1, Math.ceil(transfersHistory.length / 10));
 
   return (
     <div className="animate-fade-in space-y-6">
@@ -535,7 +553,7 @@ export default function WarehouseStockPage() {
       {/* Main Tabs (Inventory vs Receipts History vs Transfers History) */}
       <div className="flex border-b border-surface-200">
         <button
-          onClick={() => setViewTab('inventory')}
+          onClick={() => openView('inventory')}
           className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
             viewTab === 'inventory'
               ? 'border-primary-500 text-primary-600'
@@ -545,7 +563,7 @@ export default function WarehouseStockPage() {
           Stock Overview ({data?.items?.length || 0} Products)
         </button>
         <button
-          onClick={() => setViewTab('receipts_history')}
+          onClick={() => openView('receipts_history')}
           className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
             viewTab === 'receipts_history'
               ? 'border-primary-500 text-primary-600'
@@ -555,7 +573,7 @@ export default function WarehouseStockPage() {
           Recent Receipts History
         </button>
         <button
-          onClick={() => setViewTab('transfers_history')}
+          onClick={() => openView('transfers_history')}
           className={`px-4 py-2.5 text-sm font-semibold border-b-2 transition-colors ${
             viewTab === 'transfers_history'
               ? 'border-primary-500 text-primary-600'
@@ -567,7 +585,8 @@ export default function WarehouseStockPage() {
       </div>
 
       {/* VIEW 1: Main Inventory Overview */}
-      {viewTab === 'inventory' && (
+      {viewTab === 'inventory' && paneLoading && <LoadingSpinner className="py-16" />}
+      {viewTab === 'inventory' && !paneLoading && (
         <div className="space-y-4">
           {/* Search & Filter Bar */}
           <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3">
@@ -693,11 +712,12 @@ export default function WarehouseStockPage() {
                 render: (m: Movement) => <span className="text-xs text-surface-400">{m.notes || '-'}</span>,
               },
             ]}
-            data={receiptsHistory}
+            data={receiptsHistory.slice((Math.min(receiptPage, receiptPages) - 1) * 10, Math.min(receiptPage, receiptPages) * 10)}
             keyExtractor={m => m.id}
             loading={historyLoading}
             emptyMessage="No stock received history found."
           />
+          <Pagination page={Math.min(receiptPage, receiptPages)} totalPages={receiptPages} onPageChange={setReceiptPage} />
         </div>
       )}
 
@@ -749,11 +769,12 @@ export default function WarehouseStockPage() {
                 render: (m: Movement) => <span className="text-xs text-surface-400">{m.notes || '-'}</span>,
               },
             ]}
-            data={transfersHistory}
+            data={transfersHistory.slice((Math.min(transferPage, transferPages) - 1) * 10, Math.min(transferPage, transferPages) * 10)}
             keyExtractor={m => m.id}
             loading={historyLoading}
             emptyMessage="No transfer history found."
           />
+          <Pagination page={Math.min(transferPage, transferPages)} totalPages={transferPages} onPageChange={setTransferPage} />
         </div>
       )}
 
@@ -928,7 +949,6 @@ export default function WarehouseStockPage() {
                 {(data?.items || [])
                   .filter(
                     p =>
-                      p.warehouseStock > 0 &&
                       (p.productName.toLowerCase().includes(transferProdSearch.toLowerCase()) ||
                         p.productSku.toLowerCase().includes(transferProdSearch.toLowerCase())) &&
                       !transferItems.find(li => li.productId === p.productId)
@@ -970,7 +990,6 @@ export default function WarehouseStockPage() {
                     <Input
                       type="number"
                       min={1}
-                      max={li.maxQuantity || 999999}
                       value={li.quantity}
                       onChange={e => updateTransferQty(idx, parseInt(e.target.value) || 1)}
                       className="w-24 text-center"

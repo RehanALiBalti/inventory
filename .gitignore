@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# standalone staff mobile app
+/staff-app
+
 # production
 /build
 

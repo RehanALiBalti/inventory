@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useAuth, useHasShopPermission } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
-import { Button, Input, Select, Alert, Card, ConfirmDialog, SearchInput, EmptyState, DataTable, Badge, Modal } from '@/components/ui';
+import { Button, Input, Select, Alert, Card, ConfirmDialog, SearchInput, EmptyState, DataTable, Badge, Modal, Pagination, LoadingSpinner } from '@/components/ui';
 import { v4 as uuidv4 } from 'uuid';
 import { downloadTransferPdf, downloadAllTransfersRecordPdf } from '@/lib/pdf/generatePdf';
 import { fetchAllMovements } from '@/lib/fetchAllMovements';
@@ -78,6 +78,8 @@ export default function TransfersPage() {
   const [shopName, setShopName] = useState('Shop');
   const [exportingAll, setExportingAll] = useState(false);
   const [tab, setTab] = useState<'new' | 'history'>('new');
+  const [histPage, setHistPage] = useState(1);
+  const [paneLoading, setPaneLoading] = useState(false);
 
   // Post-transfer PDF modal
   const [postTransferModalOpen, setPostTransferModalOpen] = useState(false);
@@ -246,6 +248,20 @@ export default function TransfersPage() {
     loadHistory();
   };
 
+  const historyPages = Math.max(1, Math.ceil(history.length / 10));
+  const switchTab = (next: 'new' | 'history') => {
+    if (next === tab) return;
+    setTab(next);
+    if (next === 'history') {
+      setHistPage(1);
+      setHistLoading(true);
+      window.setTimeout(() => setHistLoading(false), 420);
+    } else {
+      setPaneLoading(true);
+      window.setTimeout(() => setPaneLoading(false), 420);
+    }
+  };
+
   const filteredProducts = products.filter(p =>
     p.name.toLowerCase().includes(productSearch.toLowerCase()) ||
     p.sku.toLowerCase().includes(productSearch.toLowerCase())
@@ -265,7 +281,7 @@ export default function TransfersPage() {
           }
         />
         <div className="mt-4">
-          <Button variant="secondary" onClick={() => setTab('history')}>View Transfer History</Button>
+          <Button variant="secondary" onClick={() => switchTab('history')}>View Transfer History</Button>
         </div>
       </div>
     );
@@ -338,10 +354,10 @@ export default function TransfersPage() {
 
       {/* Tab selector */}
       <div className="flex gap-2 mb-6">
-        <Button variant={tab === 'new' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('new')}>
+        <Button variant={tab === 'new' ? 'primary' : 'ghost'} size="sm" onClick={() => switchTab('new')}>
           New Transfer
         </Button>
-        <Button variant={tab === 'history' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('history')}>
+        <Button variant={tab === 'history' ? 'primary' : 'ghost'} size="sm" onClick={() => switchTab('history')}>
           Transfer History
         </Button>
       </div>
@@ -349,7 +365,8 @@ export default function TransfersPage() {
       {error && <Alert variant="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {success && <Alert variant="success" onDismiss={() => setSuccess(null)}>{success}</Alert>}
 
-      {tab === 'new' && (
+      {tab === 'new' && paneLoading && <LoadingSpinner className="py-16" />}
+      {tab === 'new' && !paneLoading && (
         <div className="space-y-6">
           {/* Warehouse selection */}
           <Card>
@@ -414,7 +431,6 @@ export default function TransfersPage() {
                       <Input
                         type="number"
                         min={1}
-                        max={balance?.quantity || 999999}
                         value={li.quantity}
                         onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
                         className="w-24 text-center"
@@ -455,11 +471,12 @@ export default function TransfersPage() {
         <div className="glass-card overflow-hidden">
           <DataTable
             columns={histColumns}
-            data={history}
+            data={history.slice((Math.min(histPage, historyPages) - 1) * 10, Math.min(histPage, historyPages) * 10)}
             keyExtractor={(m) => m.id}
             loading={histLoading}
             emptyMessage="No transfers yet"
           />
+          <Pagination page={Math.min(histPage, historyPages)} totalPages={historyPages} onPageChange={setHistPage} />
         </div>
       )}
 

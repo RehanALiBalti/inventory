@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
-import { DataTable, Badge, Select, Alert, Button } from '@/components/ui';
+import { DataTable, Badge, Select, Alert, Button, Pagination } from '@/components/ui';
 import { downloadSaleReceiptPdf, downloadTransferPdf, downloadMasterHistoryReportPdf } from '@/lib/pdf/generatePdf';
 import { fetchAllMovements } from '@/lib/fetchAllMovements';
 import { ReverseModal } from '@/components/stock/ReverseModal';
@@ -45,6 +45,7 @@ export default function ShopHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
+  const [page, setPage] = useState(1);
   const [exportingAll, setExportingAll] = useState(false);
 
   // Reversal Modal
@@ -195,6 +196,8 @@ export default function ShopHistoryPage() {
     }},
   ];
 
+  const historyPages = Math.max(1, Math.ceil(movements.length / 10));
+
   return (
     <div className="animate-fade-in space-y-4">
       <PageHeader title="Transaction History" description={isAdmin ? 'All shop transactions and documents' : 'Your transaction history and documents'} />
@@ -202,7 +205,7 @@ export default function ShopHistoryPage() {
       {success && <Alert variant="success" onDismiss={() => setSuccess(null)}>{success}</Alert>}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
         <div className="max-w-xs w-full">
-          <Select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)} placeholder="All types"
+          <Select value={typeFilter} onChange={(e) => { setPage(1); setLoading(true); setTypeFilter(e.target.value); }} placeholder="All types"
             options={Object.entries(typeLabels).map(([val, label]) => ({ value: val, label }))} />
         </div>
         <Button
@@ -216,7 +219,14 @@ export default function ShopHistoryPage() {
         </Button>
       </div>
       <div className="glass-card overflow-hidden">
-        <DataTable columns={columns} data={movements} keyExtractor={(m) => m.id} loading={loading} emptyMessage="No transactions found" />
+        <DataTable
+          columns={columns}
+          data={movements.slice((Math.min(page, historyPages) - 1) * 10, Math.min(page, historyPages) * 10)}
+          keyExtractor={(m) => m.id}
+          loading={loading}
+          emptyMessage="No transactions found"
+        />
+        <Pagination page={Math.min(page, historyPages)} totalPages={historyPages} onPageChange={setPage} />
       </div>
 
       <ReverseModal

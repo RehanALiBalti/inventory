@@ -8,7 +8,8 @@
     "start": "next start -p 8012",
     "lint": "next lint",
     "bootstrap-admin": "npx ts-node --project tsconfig.scripts.json scripts/bootstrap-admin.ts",
-    "seed-defaults": "npx ts-node --project tsconfig.scripts.json scripts/seed-defaults.ts"
+    "seed-defaults": "npx ts-node --project tsconfig.scripts.json scripts/seed-defaults.ts",
+    "staff": "npm --prefix staff-app start"
   },
   "dependencies": {
     "firebase": "^11.7.1",
