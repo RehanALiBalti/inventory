@@ -150,13 +150,8 @@ export default function SalesPage() {
   };
 
   const updateQuantity = (idx: number, qty: number) => {
-    const item = lineItems[idx];
-    const balance = shopBalances.find((b) => b.productId === item.productId);
-    const maxQty = balance?.quantity ?? 999999;
-
     const updated = [...lineItems];
-    const finalQty = Math.max(1, Math.min(qty, maxQty));
-    updated[idx] = { ...updated[idx], quantity: finalQty };
+    updated[idx] = { ...updated[idx], quantity: Math.max(1, qty) };
     setLineItems(updated);
   };
 
@@ -170,18 +165,6 @@ export default function SalesPage() {
     if (lineItems.length === 0) {
       setModalError('Please add at least one product to record the sale.');
       return;
-    }
-
-    // Check stock availability
-    for (const item of lineItems) {
-      const balance = shopBalances.find((b) => b.productId === item.productId);
-      const available = balance?.quantity ?? 0;
-      if (item.quantity > available) {
-        setModalError(
-          `Insufficient stock for "${item.productName}". Available: ${available}, requested: ${item.quantity}.`
-        );
-        return;
-      }
     }
 
     setSubmitting(true);
@@ -673,19 +656,14 @@ export default function SalesPage() {
                 {filteredProducts.slice(0, 10).map((p) => {
                   const balance = shopBalances.find((b) => b.productId === p.id);
                   const currentStock = balance?.quantity ?? 0;
-                  const isOutOfStock = currentStock <= 0;
+                  const isShort = currentStock <= 0;
 
                   return (
                     <button
                       key={p.id}
                       type="button"
                       onClick={() => addLineItem(p)}
-                      disabled={isOutOfStock}
-                      className={`w-full px-3 py-2.5 text-left flex items-center justify-between text-sm transition-colors ${
-                        isOutOfStock
-                          ? 'opacity-50 cursor-not-allowed bg-surface-50'
-                          : 'hover:bg-primary-50 cursor-pointer'
-                      }`}
+                      className="w-full px-3 py-2.5 text-left flex items-center justify-between text-sm transition-colors hover:bg-primary-50 cursor-pointer"
                     >
                       <div>
                         <span className="font-medium text-surface-900">{p.name}</span>
@@ -693,12 +671,12 @@ export default function SalesPage() {
                       </div>
                       <span
                         className={`text-xs font-medium px-2 py-0.5 rounded-full ${
-                          isOutOfStock
+                          isShort
                             ? 'bg-danger-50 text-danger-600'
                             : 'bg-surface-100 text-surface-700'
                         }`}
                       >
-                        {isOutOfStock ? 'Out of stock' : `${currentStock} in shop stock`}
+                        {`${currentStock} in shop stock`}
                       </span>
                     </button>
                   );
@@ -751,7 +729,6 @@ export default function SalesPage() {
                         <input
                           type="number"
                           min={1}
-                          max={availableStock}
                           value={li.quantity}
                           onChange={(e) => updateQuantity(idx, parseInt(e.target.value) || 1)}
                           className="w-14 text-center py-1 text-sm font-semibold bg-white border border-surface-200 rounded-lg outline-none focus:ring-1 focus:ring-primary-500"
@@ -759,8 +736,7 @@ export default function SalesPage() {
                         <button
                           type="button"
                           onClick={() => updateQuantity(idx, li.quantity + 1)}
-                          disabled={li.quantity >= availableStock}
-                          className="w-7 h-7 rounded-lg bg-white border border-surface-200 flex items-center justify-center text-surface-700 hover:bg-surface-100 disabled:opacity-40 transition-colors"
+                          className="w-7 h-7 rounded-lg bg-white border border-surface-200 flex items-center justify-center text-surface-700 hover:bg-surface-100 transition-colors"
                         >
                           +
                         </button>

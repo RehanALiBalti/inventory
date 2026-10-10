@@ -42,7 +42,10 @@ service cloud.firestore {
         && (
           request.resource.data.quantity >= 0
           || (
-            resource.data.locationType == 'warehouse'
+            (
+              resource.data.locationType == 'warehouse'
+              || resource.data.locationType == 'shop'
+            )
             && request.resource.data.quantity < resource.data.quantity
           )
         );
@@ -68,6 +71,7 @@ service cloud.firestore {
         && (
           request.resource.data.quantity >= 0
           || resource.data.locationType == 'warehouse'
+          || resource.data.locationType == 'shop'
         )
         && request.resource.data.reversalMovementId is string
         && request.resource.data.reversalMovementId.size() > 8
@@ -75,8 +79,8 @@ service cloud.firestore {
     }
 
     function reversalLinked() {
-      let rev = get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data;
-      let original = get(/databases/$(database)/documents/stockMovements/$(rev.originalMovementId)).data;
+      let rev = getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data;
+      let original = getAfter(/databases/$(database)/documents/stockMovements/$(rev.originalMovementId)).data;
       let qty = lineQty(original.lineItems, resource.data.productId);
       return rev.type == 'reversal'
         && rev.actorUid == request.auth.uid
@@ -124,8 +128,8 @@ service cloud.firestore {
     }
 
     // Stock Balances: staff may move quantity for a sale or a warehouse-to-shop transfer.
-    // A transfer may take warehouse quantity below zero. Receiving stock stays admin-only.
-    // A missing shop balance must still be readable so a transfer can create it.
+    // A sale or transfer may take quantity below zero. Receiving stock stays admin-only.
+    // A missing shop balance must still be readable so a transfer or short sale can create it.
     match /stockBalances/{balanceId} {
       allow get: if request.auth != null && (
         !exists(/databases/$(database)/documents/stockBalances/$(balanceId)) ||
@@ -138,6 +142,12 @@ service cloud.firestore {
         request.resource.data.locationId == request.resource.data.shopId &&
         request.resource.data.quantity is number &&
         request.resource.data.quantity > 0
+      ) || (
+        staffCan(request.resource.data.shopId, 'recordSale') &&
+        request.resource.data.locationType == 'shop' &&
+        request.resource.data.locationId == request.resource.data.shopId &&
+        request.resource.data.quantity is number &&
+        request.resource.data.quantity < 0
       ) || (
         staffCan(request.resource.data.shopId, 'transfer') &&
         request.resource.data.locationType == 'warehouse' &&
@@ -199,16 +209,16 @@ service cloud.firestore {
             request.resource.data.notes.size() >= 3 &&
             request.resource.data.notes.size() <= 300 &&
             request.resource.data.lineItems.size() <= 20 &&
-            exists(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)) &&
-            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversed == true &&
-            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversalMovementId == movementId &&
-            get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.shopId == request.resource.data.shopId &&
+            existsAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)) &&
+            getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversed == true &&
+            getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.reversalMovementId == movementId &&
+            getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.shopId == request.resource.data.shopId &&
             (
               (
-                get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'sale' &&
+                getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'sale' &&
                 staffCan(request.resource.data.shopId, 'recordSale')
               ) || (
-                get(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'warehouse_to_shop_transfer' &&
+                getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.originalMovementId)).data.type == 'warehouse_to_shop_transfer' &&
                 staffCan(request.resource.data.shopId, 'transfer')
               )
             )
@@ -221,10 +231,10 @@ service cloud.firestore {
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reversed', 'reversalMovementId']) &&
         request.resource.data.reversed == true &&
         request.resource.data.reversalMovementId is string &&
-        exists(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)) &&
-        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.type == 'reversal' &&
-        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.originalMovementId == movementId &&
-        get(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.actorUid == request.auth.uid &&
+        existsAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)) &&
+        getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.type == 'reversal' &&
+        getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.originalMovementId == movementId &&
+        getAfter(/databases/$(database)/documents/stockMovements/$(request.resource.data.reversalMovementId)).data.actorUid == request.auth.uid &&
         (
           (resource.data.type == 'sale' && staffCan(resource.data.shopId, 'recordSale')) ||
           (resource.data.type == 'warehouse_to_shop_transfer' && staffCan(resource.data.shopId, 'transfer'))

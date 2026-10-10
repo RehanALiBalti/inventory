@@ -83,21 +83,7 @@ export async function POST(request: NextRequest) {
       });
       const balanceDocs = await Promise.all(balanceRefs.map(ref => txn.get(ref)));
 
-      // Step 2: Validate all stock availability before writing
-      for (let i = 0; i < lineItems.length; i++) {
-        const item = lineItems[i];
-        const productData = productDocs[i].data()!;
-        const balanceDoc = balanceDocs[i];
-        const currentQty = balanceDoc.exists ? balanceDoc.data()!.quantity : 0;
-
-        if (currentQty < item.quantity) {
-          throw new Error(
-            `Insufficient stock for ${productData.name}: available ${currentQty}, requested ${item.quantity}`
-          );
-        }
-      }
-
-      // Step 3: Perform all writes
+      // Shop quantity may go negative. Admin can restore later with receive + transfer.
       const movementRef = adminDb.collection('stockMovements').doc();
       const movementLineItems = [];
 
@@ -109,9 +95,19 @@ export async function POST(request: NextRequest) {
         const currentQty = balanceDoc.exists ? balanceDoc.data()!.quantity : 0;
         const newQty = currentQty - item.quantity;
 
-        // Update balance
         if (balanceDoc.exists) {
           txn.update(balanceRef, {
+            quantity: newQty,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        } else {
+          txn.set(balanceRef, {
+            productId: item.productId,
+            productName: productData.name,
+            locationId: shopId,
+            locationName: shopName,
+            locationType: 'shop',
+            shopId,
             quantity: newQty,
             updatedAt: FieldValue.serverTimestamp(),
           });
