@@ -171,24 +171,37 @@ export async function downloadSaleReceiptPdf(data: SaleReceiptData) {
 
   y += 28;
 
-  // Table Header
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(203, 213, 225);
-  doc.rect(margin, y, contentWidth, 9, 'FD');
+  const pageHeight = doc.internal.pageSize.getHeight();
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(51, 65, 85);
-  doc.text('#', margin + 4, y + 6);
-  doc.text('PRODUCT DESCRIPTION', margin + 16, y + 6);
-  doc.text('SKU', margin + 115, y + 6);
-  doc.text('QTY', margin + contentWidth - 6, y + 6, { align: 'right' });
+  // Table Header (redrawn at the top of every new page)
+  const drawItemsHeader = () => {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, y, contentWidth, 9, 'FD');
 
-  y += 9;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(51, 65, 85);
+    doc.text('#', margin + 4, y + 6);
+    doc.text('PRODUCT DESCRIPTION', margin + 16, y + 6);
+    doc.text('SKU', margin + 115, y + 6);
+    doc.text('QTY', margin + contentWidth - 6, y + 6, { align: 'right' });
+
+    y += 9;
+  };
+
+  drawItemsHeader();
 
   // Table Rows
   let totalUnits = 0;
   data.lineItems.forEach((item, index) => {
+    // Move to a fresh page instead of letting rows run off the bottom
+    if (y + 8 > pageHeight - 20) {
+      doc.addPage();
+      y = 16;
+      drawItemsHeader();
+    }
+
     totalUnits += item.quantity;
     const isEven = index % 2 === 0;
     doc.setFillColor(isEven ? 255 : 248, isEven ? 255 : 250, isEven ? 255 : 252);
@@ -218,6 +231,10 @@ export async function downloadSaleReceiptPdf(data: SaleReceiptData) {
   });
 
   // Table Summary Footer
+  if (y + 10 > pageHeight - 20) {
+    doc.addPage();
+    y = 16;
+  }
   doc.setFillColor(241, 245, 249);
   doc.setDrawColor(203, 213, 225);
   doc.rect(margin, y, contentWidth, 10, 'FD');
@@ -231,6 +248,10 @@ export async function downloadSaleReceiptPdf(data: SaleReceiptData) {
 
   // Notes if any
   if (data.notes) {
+    if (y + 16 > pageHeight - 20) {
+      doc.addPage();
+      y = 16;
+    }
     doc.setFillColor(248, 250, 252);
     doc.setDrawColor(226, 232, 240);
     doc.roundedRect(margin, y, contentWidth, 16, 1.5, 1.5, 'FD');
@@ -242,13 +263,18 @@ export async function downloadSaleReceiptPdf(data: SaleReceiptData) {
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(51, 65, 85);
-    doc.text(data.notes, margin + 5, y + 11);
+    const noteLines = doc.splitTextToSize(data.notes, contentWidth - 10);
+    doc.text(noteLines[0] || '', margin + 5, y + 11);
 
     y += 24;
   }
 
-  // Footer divider & Verification
-  y = Math.max(y, 250);
+  // Footer divider & Verification — pinned near the bottom only when it fits
+  if (y < 250) y = 250;
+  if (y + 12 > pageHeight - 10) {
+    doc.addPage();
+    y = 16;
+  }
   doc.setDrawColor(226, 232, 240);
   doc.line(margin, y, margin + contentWidth, y);
 
@@ -346,23 +372,36 @@ export async function downloadTransferPdf(data: TransferDocData) {
 
   y += 38;
 
-  // Line items table
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(203, 213, 225);
-  doc.rect(margin, y, contentWidth, 9, 'FD');
+  const pageHeight = doc.internal.pageSize.getHeight();
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(51, 65, 85);
-  doc.text('#', margin + 4, y + 6);
-  doc.text('ITEM / PRODUCT DISPATCHED', margin + 16, y + 6);
-  doc.text('SKU / CODE', margin + 120, y + 6);
-  doc.text('QUANTITY', margin + contentWidth - 6, y + 6, { align: 'right' });
+  // Line items table header (redrawn at the top of every new page)
+  const drawItemsHeader = () => {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, y, contentWidth, 9, 'FD');
 
-  y += 9;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(51, 65, 85);
+    doc.text('#', margin + 4, y + 6);
+    doc.text('ITEM / PRODUCT DISPATCHED', margin + 16, y + 6);
+    doc.text('SKU / CODE', margin + 120, y + 6);
+    doc.text('QUANTITY', margin + contentWidth - 6, y + 6, { align: 'right' });
+
+    y += 9;
+  };
+
+  drawItemsHeader();
 
   let totalUnits = 0;
   data.lineItems.forEach((item, index) => {
+    // Move to a fresh page instead of letting rows run off the bottom
+    if (y + 8 > pageHeight - 20) {
+      doc.addPage();
+      y = 16;
+      drawItemsHeader();
+    }
+
     totalUnits += item.quantity;
     const isEven = index % 2 === 0;
     doc.setFillColor(isEven ? 255 : 248, isEven ? 255 : 250, isEven ? 255 : 252);
@@ -392,6 +431,10 @@ export async function downloadTransferPdf(data: TransferDocData) {
   });
 
   // Table summary
+  if (y + 10 > pageHeight - 20) {
+    doc.addPage();
+    y = 16;
+  }
   doc.setFillColor(241, 245, 249);
   doc.setDrawColor(203, 213, 225);
   doc.rect(margin, y, contentWidth, 10, 'FD');
@@ -404,6 +447,10 @@ export async function downloadTransferPdf(data: TransferDocData) {
   y += 18;
 
   if (data.notes) {
+    if (y + 15 > pageHeight - 20) {
+      doc.addPage();
+      y = 16;
+    }
     doc.setFillColor(248, 250, 252);
     doc.setDrawColor(226, 232, 240);
     doc.roundedRect(margin, y, contentWidth, 15, 1.5, 1.5, 'FD');
@@ -415,13 +462,19 @@ export async function downloadTransferPdf(data: TransferDocData) {
 
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(51, 65, 85);
-    doc.text(data.notes, margin + 5, y + 10.5);
+    const noteLines = doc.splitTextToSize(data.notes, contentWidth - 10);
+    doc.text(noteLines[0] || '', margin + 5, y + 10.5);
 
     y += 22;
   }
 
   // Dual Sign-off Boxes (Essential for mobile stock gate passes)
-  y = Math.max(y, 235);
+  if (y < 235) y = 235;
+  // Move the sign-off boxes to a fresh page when they no longer fit
+  if (y + 45 > pageHeight - 10) {
+    doc.addPage();
+    y = 16;
+  }
   const boxWidth = (contentWidth - 8) / 2;
 
   // Box 1: Dispatched by
@@ -473,6 +526,7 @@ export async function downloadDailySalesPdf(report: DailySalesReportData) {
   });
 
   const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const margin = 14;
   const contentWidth = pageWidth - margin * 2;
   let y = 16;
@@ -544,18 +598,28 @@ export async function downloadDailySalesPdf(report: DailySalesReportData) {
     doc.text('PRODUCT TURNOVER BREAKDOWN (TODAY)', margin, y + 4);
 
     y += 7;
-    doc.setFillColor(241, 245, 249);
-    doc.setDrawColor(203, 213, 225);
-    doc.rect(margin, y, contentWidth, 7, 'FD');
+    const drawProductHeader = () => {
+      doc.setFillColor(241, 245, 249);
+      doc.setDrawColor(203, 213, 225);
+      doc.rect(margin, y, contentWidth, 7, 'FD');
 
-    doc.setFontSize(7.5);
-    doc.setTextColor(51, 65, 85);
-    doc.text('PRODUCT NAME', margin + 4, y + 5);
-    doc.text('SKU', margin + 115, y + 5);
-    doc.text('TOTAL UNITS SOLD', margin + contentWidth - 4, y + 5, { align: 'right' });
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(7.5);
+      doc.setTextColor(51, 65, 85);
+      doc.text('PRODUCT NAME', margin + 4, y + 5);
+      doc.text('SKU', margin + 115, y + 5);
+      doc.text('TOTAL UNITS SOLD', margin + contentWidth - 4, y + 5, { align: 'right' });
 
-    y += 7;
-    report.productSummary.slice(0, 15).forEach((p, idx) => {
+      y += 7;
+    };
+
+    drawProductHeader();
+    report.productSummary.forEach((p, idx) => {
+      if (y + 7 > pageHeight - 20) {
+        doc.addPage();
+        y = 16;
+        drawProductHeader();
+      }
       const isEven = idx % 2 === 0;
       doc.setFillColor(isEven ? 255 : 248, isEven ? 255 : 250, isEven ? 255 : 252);
       doc.rect(margin, y, contentWidth, 7, 'F');
@@ -583,31 +647,42 @@ export async function downloadDailySalesPdf(report: DailySalesReportData) {
   }
 
   // Section 2: Detailed Sales Transactions Log
+  if (y + 21 > pageHeight - 20) {
+    doc.addPage();
+    y = 16;
+  }
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9);
   doc.setTextColor(30, 41, 59);
   doc.text('ITEMIZED SALES LOG', margin, y + 4);
 
   y += 7;
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(203, 213, 225);
-  doc.rect(margin, y, contentWidth, 7, 'FD');
 
-  doc.setFontSize(7.5);
-  doc.setTextColor(51, 65, 85);
-  doc.text('TIME', margin + 4, y + 5);
-  doc.text('CASHIER', margin + 28, y + 5);
-  doc.text('ITEMS SOLD', margin + 65, y + 5);
-  doc.text('STATUS', margin + 140, y + 5);
-  doc.text('UNITS', margin + contentWidth - 4, y + 5, { align: 'right' });
+  const drawSalesHeader = () => {
+    doc.setFillColor(241, 245, 249);
+    doc.setDrawColor(203, 213, 225);
+    doc.rect(margin, y, contentWidth, 7, 'FD');
 
-  y += 7;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.5);
+    doc.setTextColor(51, 65, 85);
+    doc.text('TIME', margin + 4, y + 5);
+    doc.text('CASHIER', margin + 28, y + 5);
+    doc.text('ITEMS SOLD', margin + 65, y + 5);
+    doc.text('STATUS', margin + 140, y + 5);
+    doc.text('UNITS', margin + contentWidth - 4, y + 5, { align: 'right' });
 
-  report.sales.slice(0, 30).forEach((s, idx) => {
-    // Check if new page needed
-    if (y > 270) {
+    y += 7;
+  };
+
+  drawSalesHeader();
+
+  report.sales.forEach((s, idx) => {
+    // Move to a fresh page instead of letting rows run off the bottom
+    if (y + 7.5 > pageHeight - 20) {
       doc.addPage();
       y = 16;
+      drawSalesHeader();
     }
 
     const isEven = idx % 2 === 0;
@@ -643,11 +718,12 @@ export async function downloadDailySalesPdf(report: DailySalesReportData) {
     y += 7.5;
   });
 
-  // Footer
-  y = Math.max(y + 8, 275);
-  if (y > 280) {
+  // Footer — pinned near the bottom only when it fits
+  y += 8;
+  if (y < 275) y = 275;
+  if (y + 6 > pageHeight - 10) {
     doc.addPage();
-    y = 20;
+    y = 16;
   }
   doc.setDrawColor(226, 232, 240);
   doc.line(margin, y, margin + contentWidth, y);
