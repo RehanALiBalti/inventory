@@ -62,6 +62,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    if ((original.type === 'adjustment' || original.type === 'shop_to_warehouse_transfer') && !isAdmin) {
+      return NextResponse.json(
+        { success: false, error: 'Only an admin can reverse this transaction' },
+        { status: 403 }
+      );
+    }
+
     // Check if already reversed
     if (original.reversed) {
       return NextResponse.json({ success: false, error: 'This movement has already been reversed' }, { status: 400 });
@@ -72,69 +79,144 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Cannot reverse a reversal' }, { status: 400 });
     }
 
-    // Execute reversal in a transaction
+    // Execute reversal in a transaction. All balance reads happen before any writes.
     const reversalId = await adminDb.runTransaction(async (txn) => {
       const reversalRef = adminDb.collection('stockMovements').doc();
-      const reversalLineItems = [];
+      const items = original.lineItems || [];
 
-      for (const item of original.lineItems) {
-        // Reverse the stock effects
-        if (original.sourceLocationId) {
-          // Add back to source
-          const sourceBalanceId = `${original.sourceLocationId}_${item.productId}`;
-          const sourceBalanceRef = adminDb.collection('stockBalances').doc(sourceBalanceId);
-          const sourceBalanceDoc = await txn.get(sourceBalanceRef);
-          const sourceQty = sourceBalanceDoc.exists ? sourceBalanceDoc.data()!.quantity : 0;
-          const newSourceQty = sourceQty + item.quantity;
+      type Touch = {
+        ref: FirebaseFirestore.DocumentReference;
+        itemIndex: number;
+        side: 'source' | 'dest' | 'adjust';
+        delta: number;
+        locationId: string;
+        locationName: string;
+        locationType: string;
+        productId: string;
+        productName: string;
+      };
 
-          if (sourceBalanceDoc.exists) {
-            txn.update(sourceBalanceRef, { quantity: newSourceQty, updatedAt: FieldValue.serverTimestamp() });
-          } else {
-            txn.set(sourceBalanceRef, {
-              productId: item.productId, productName: item.productName,
-              locationId: original.sourceLocationId, locationName: original.sourceLocationName,
+      const touches: Touch[] = [];
+
+      if (original.type === 'adjustment') {
+        const locationId = original.sourceLocationId as string;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          const direction = item.direction === 'decrease' ? 'decrease' : 'increase';
+          touches.push({
+            ref: adminDb.collection('stockBalances').doc(`${locationId}_${item.productId}`),
+            itemIndex: i,
+            side: 'adjust',
+            delta: direction === 'increase' ? -Number(item.quantity) : Number(item.quantity),
+            locationId,
+            locationName: original.sourceLocationName,
+            locationType: original.sourceLocationType,
+            productId: item.productId,
+            productName: item.productName,
+          });
+        }
+      } else {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (original.sourceLocationId) {
+            touches.push({
+              ref: adminDb.collection('stockBalances').doc(`${original.sourceLocationId}_${item.productId}`),
+              itemIndex: i,
+              side: 'source',
+              delta: Number(item.quantity),
+              locationId: original.sourceLocationId,
+              locationName: original.sourceLocationName,
               locationType: original.sourceLocationType,
-              quantity: newSourceQty, updatedAt: FieldValue.serverTimestamp(),
+              productId: item.productId,
+              productName: item.productName,
             });
           }
-
-          item.sourceBalanceBefore = sourceQty;
-          item.sourceBalanceAfter = newSourceQty;
-        }
-
-        if (original.destLocationId) {
-          // Deduct from destination
-          const destBalanceId = `${original.destLocationId}_${item.productId}`;
-          const destBalanceRef = adminDb.collection('stockBalances').doc(destBalanceId);
-          const destBalanceDoc = await txn.get(destBalanceRef);
-          const destQty = destBalanceDoc.exists ? destBalanceDoc.data()!.quantity : 0;
-          const newDestQty = destQty - item.quantity;
-
-          // Cannot go negative
-          if (newDestQty < 0) {
-            throw new Error(
-              `Cannot reverse: ${item.productName} at ${original.destLocationName} has ${destQty} units, ` +
-              `but reversal requires ${item.quantity}. Some stock may have already been sold or transferred.`
-            );
+          if (original.destLocationId) {
+            touches.push({
+              ref: adminDb.collection('stockBalances').doc(`${original.destLocationId}_${item.productId}`),
+              itemIndex: i,
+              side: 'dest',
+              delta: -Number(item.quantity),
+              locationId: original.destLocationId,
+              locationName: original.destLocationName,
+              locationType: original.destLocationType,
+              productId: item.productId,
+              productName: item.productName,
+            });
           }
-
-          txn.update(destBalanceRef, { quantity: newDestQty, updatedAt: FieldValue.serverTimestamp() });
-
-          item.destBalanceBefore = destQty;
-          item.destBalanceAfter = newDestQty;
         }
+      }
 
-        reversalLineItems.push({
+      const snaps = await Promise.all(touches.map((touch) => txn.get(touch.ref)));
+
+      const reversalByIndex: Record<number, {
+        productId: string;
+        productName: string;
+        productSku: string;
+        quantity: number;
+        direction?: 'increase' | 'decrease';
+        sourceBalanceBefore?: number;
+        sourceBalanceAfter?: number;
+        destBalanceBefore?: number;
+        destBalanceAfter?: number;
+      }> = {};
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        reversalByIndex[i] = {
           productId: item.productId,
           productName: item.productName,
           productSku: item.productSku,
           quantity: item.quantity,
-          sourceBalanceBefore: item.sourceBalanceBefore,
-          sourceBalanceAfter: item.sourceBalanceAfter,
-          destBalanceBefore: item.destBalanceBefore,
-          destBalanceAfter: item.destBalanceAfter,
-        });
+          direction: item.direction === 'increase'
+            ? 'decrease'
+            : item.direction === 'decrease'
+              ? 'increase'
+              : undefined,
+        };
       }
+
+      for (let i = 0; i < touches.length; i++) {
+        const touch = touches[i];
+        const snap = snaps[i];
+        const current = snap.exists ? Number(snap.data()!.quantity) || 0 : 0;
+        const next = current + touch.delta;
+
+        if (touch.side === 'dest' && next < 0) {
+          throw new Error(
+            `Cannot reverse: ${touch.productName} at ${touch.locationName} has ${current} units, ` +
+            `but reversal requires ${Math.abs(touch.delta)}. Some stock may have already been sold or transferred.`
+          );
+        }
+
+        if (snap.exists) {
+          txn.update(touch.ref, { quantity: next, updatedAt: FieldValue.serverTimestamp() });
+        } else if (touch.side === 'dest') {
+          throw new Error(`Cannot reverse: ${touch.productName} has no balance at ${touch.locationName}.`);
+        } else {
+          txn.set(touch.ref, {
+            productId: touch.productId,
+            productName: touch.productName,
+            locationId: touch.locationId,
+            locationName: touch.locationName,
+            locationType: touch.locationType,
+            shopId: original.shopId || null,
+            quantity: next,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+
+        const line = reversalByIndex[touch.itemIndex];
+        if (touch.side === 'dest') {
+          line.destBalanceBefore = current;
+          line.destBalanceAfter = next;
+        } else {
+          line.sourceBalanceBefore = current;
+          line.sourceBalanceAfter = next;
+        }
+      }
+
+      const reversalLineItems = items.map((_: unknown, index: number) => reversalByIndex[index]);
 
       // Mark original as reversed
       const originalRef = adminDb.collection('stockMovements').doc(movementId);
@@ -154,6 +236,7 @@ export async function POST(request: NextRequest) {
         destLocationId: original.sourceLocationId || null,
         destLocationName: original.sourceLocationName || null,
         destLocationType: original.sourceLocationType || null,
+        shopId: original.shopId || null,
         shopScope: original.shopScope || null,
         actorUid: user.uid,
         actorName: user.fullName,

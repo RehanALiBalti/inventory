@@ -13,7 +13,7 @@ import { ReverseModal } from '@/components/stock/ReverseModal';
 interface Movement {
   id: string;
   type: string;
-  lineItems: { productName: string; quantity: number }[];
+  lineItems: { productName: string; quantity: number; direction?: 'increase' | 'decrease' }[];
   sourceLocationName?: string;
   destLocationName?: string;
   actorName: string;
@@ -26,6 +26,7 @@ interface Movement {
 const typeLabels: Record<string, string> = {
   stock_received: 'Received',
   warehouse_to_shop_transfer: 'Transfer (WH→Shop)',
+  shop_to_warehouse_transfer: 'Return (Shop→WH)',
   warehouse_to_warehouse_transfer: 'Transfer (WH→WH)',
   sale: 'Sale',
   reversal: 'Reversal',
@@ -152,7 +153,10 @@ export default function ShopHistoryPage() {
         {m.lineItems?.slice(0, 3).map((li, i) => (
           <div key={i} className="text-xs">
             <span className="text-surface-800">{li.productName}</span>
-            <span className="text-primary-500 font-semibold ml-1">×{li.quantity}</span>
+            <span className="text-primary-500 font-semibold ml-1">
+              {li.direction === 'increase' ? '+' : li.direction === 'decrease' ? '−' : '×'}
+              {li.quantity}
+            </span>
           </div>
         ))}
         {(m.lineItems?.length || 0) > 3 && <span className="text-xs text-surface-400">+{m.lineItems.length - 3} more</span>}

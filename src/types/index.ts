@@ -98,17 +98,22 @@ export interface StockBalance {
 export type MovementType =
   | 'stock_received'
   | 'warehouse_to_shop_transfer'
+  | 'shop_to_warehouse_transfer'
   | 'warehouse_to_warehouse_transfer'
   | 'sale'
   | 'reversal'
   | 'adjustment'
   | 'opening_balance';
 
+export type AdjustmentDirection = 'increase' | 'decrease';
+
 export interface MovementLineItem {
   productId: string;
   productName: string; // snapshot
   productSku: string; // snapshot
   quantity: number;
+  /** Set on stock adjustments */
+  direction?: AdjustmentDirection;
   /** Balance at source before this movement */
   sourceBalanceBefore?: number;
   /** Balance at source after this movement */

@@ -95,6 +95,8 @@ export async function GET(request: NextRequest) {
           productReceivedMap[li.productId] = (productReceivedMap[li.productId] || 0) + qty;
         } else if (type === 'warehouse_to_shop_transfer') {
           productTransferredMap[li.productId] = (productTransferredMap[li.productId] || 0) + qty;
+        } else if (type === 'shop_to_warehouse_transfer') {
+          productTransferredMap[li.productId] = (productTransferredMap[li.productId] || 0) - qty;
         } else if (type === 'sale') {
           productSoldMap[li.productId] = (productSoldMap[li.productId] || 0) + qty;
         }
