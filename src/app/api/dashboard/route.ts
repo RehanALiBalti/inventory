@@ -41,13 +41,16 @@ export async function GET(request: NextRequest) {
       warehouseStockCount += whStockSnap.docs.reduce((sum, doc) => sum + (doc.data().quantity || 0), 0);
     }
 
-    // Today's metrics
+    // Activity for a chosen day. Defaults to today.
     const now = new Date();
     const tz = process.env.NEXT_PUBLIC_BUSINESS_TIMEZONE || 'Asia/Karachi';
-    // Calculate start of business day
     const todayStr = now.toLocaleDateString('en-CA', { timeZone: tz });
-    const todayStart = new Date(todayStr + 'T00:00:00');
-    const todayEnd = new Date(todayStr + 'T23:59:59');
+    const requestedDate = url.searchParams.get('date');
+    const activityDate = requestedDate && /^\d{4}-\d{2}-\d{2}$/.test(requestedDate)
+      ? requestedDate
+      : todayStr;
+    const todayStart = new Date(activityDate + 'T00:00:00');
+    const todayEnd = new Date(activityDate + 'T23:59:59.999');
 
     // Today's received (into linked warehouses)
     let todayReceived = 0;
@@ -154,6 +157,7 @@ export async function GET(request: NextRequest) {
         shopName: shopData.name,
         shopStockCount,
         warehouseStockCount,
+        activityDate,
         todayReceived,
         todayTransferred,
         todaySold,

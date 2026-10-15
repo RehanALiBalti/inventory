@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { useAuth } from '@/contexts/AuthContext';
+import { useAuth, useHasShopPermission } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
 import { DataTable, Badge, Select, Alert, Button, Pagination } from '@/components/ui';
@@ -39,6 +39,12 @@ export default function ShopHistoryPage() {
   const shopId = params.shopId as string;
   const { userRecord } = useAuth();
   const isAdmin = userRecord?.role === 'admin';
+  const canTransfer = useHasShopPermission(shopId, 'transfer');
+  const canSell = useHasShopPermission(shopId, 'recordSale');
+  const viewOnly = !isAdmin && !canTransfer && !canSell;
+
+  const today = new Date();
+  const todayValue = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
 
   const [movements, setMovements] = useState<Movement[]>([]);
   const [shopName, setShopName] = useState('Shop Store');
@@ -46,6 +52,7 @@ export default function ShopHistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [typeFilter, setTypeFilter] = useState('');
+  const [activityDate, setActivityDate] = useState(todayValue);
   const [page, setPage] = useState(1);
   const [exportingAll, setExportingAll] = useState(false);
 
@@ -59,7 +66,7 @@ export default function ShopHistoryPage() {
 
   useEffect(() => {
     loadMovements();
-  }, [shopId, typeFilter]);
+  }, [shopId, typeFilter, activityDate, viewOnly]);
 
   const loadShop = async () => {
     const res = await apiFetch<{ id: string; name: string }[]>('/api/shops');
@@ -71,9 +78,13 @@ export default function ShopHistoryPage() {
 
   const loadMovements = async () => {
     setLoading(true);
-    let url = `/api/stock/movements?shopId=${shopId}&limit=50`;
+    let url = `/api/stock/movements?shopId=${shopId}&limit=100`;
     if (typeFilter) url += `&type=${typeFilter}`;
-    if (!isAdmin) url += '&ownOnly=true';
+    if (viewOnly) {
+      url += `&startDate=${activityDate}&endDate=${activityDate}`;
+    } else if (!isAdmin) {
+      url += '&ownOnly=true';
+    }
 
     const res = await apiFetch<Movement[]>(url);
     if (res.success && res.data) setMovements(res.data);
@@ -86,7 +97,11 @@ export default function ShopHistoryPage() {
     setError(null);
     let url = `/api/stock/movements?shopId=${shopId}`;
     if (typeFilter) url += `&type=${typeFilter}`;
-    if (!isAdmin) url += '&ownOnly=true';
+    if (viewOnly) {
+      url += `&startDate=${activityDate}&endDate=${activityDate}`;
+    } else if (!isAdmin) {
+      url += '&ownOnly=true';
+    }
 
     const { items, error: loadError } = await fetchAllMovements<Movement>(url);
     setExportingAll(false);
@@ -168,7 +183,7 @@ export default function ShopHistoryPage() {
     )},
     { key: 'actions', header: 'Actions', render: (m: Movement) => {
       const isPdfEligible = m.type === 'sale' || m.type.includes('transfer');
-      const canReverse = !m.reversed && m.type !== 'reversal';
+      const canReverse = !viewOnly && !m.reversed && m.type !== 'reversal';
       return (
         <div className="flex items-center gap-1.5 justify-end">
           {isPdfEligible && (
@@ -204,13 +219,41 @@ export default function ShopHistoryPage() {
 
   return (
     <div className="animate-fade-in space-y-4">
-      <PageHeader title="Transaction History" description={isAdmin ? 'All shop transactions and documents' : 'Your transaction history and documents'} />
+      <PageHeader
+        title="Transaction History"
+        description={
+          viewOnly
+            ? 'Shop activity for the date you choose'
+            : isAdmin
+              ? 'All shop transactions and documents'
+              : 'Your transaction history and documents'
+        }
+      />
       {error && <Alert variant="error" onDismiss={() => setError(null)}>{error}</Alert>}
       {success && <Alert variant="success" onDismiss={() => setSuccess(null)}>{success}</Alert>}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-        <div className="max-w-xs w-full">
-          <Select value={typeFilter} onChange={(e) => { setPage(1); setLoading(true); setTypeFilter(e.target.value); }} placeholder="All types"
-            options={Object.entries(typeLabels).map(([val, label]) => ({ value: val, label }))} />
+        <div className="flex flex-col sm:flex-row gap-3 w-full sm:w-auto">
+          <div className="max-w-xs w-full">
+            <Select value={typeFilter} onChange={(e) => { setPage(1); setLoading(true); setTypeFilter(e.target.value); }} placeholder="All types"
+              options={Object.entries(typeLabels).map(([val, label]) => ({ value: val, label }))} />
+          </div>
+          {viewOnly && (
+            <label className="flex items-center gap-2 bg-white border border-surface-200 rounded-xl px-3 py-2 h-fit">
+              <span className="text-xs font-medium text-surface-500">Date</span>
+              <input
+                type="date"
+                value={activityDate}
+                max={todayValue}
+                onChange={(e) => {
+                  if (!e.target.value) return;
+                  setPage(1);
+                  setLoading(true);
+                  setActivityDate(e.target.value);
+                }}
+                className="text-sm font-semibold bg-transparent text-surface-800 outline-none"
+              />
+            </label>
+          )}
         </div>
         <Button
           variant="secondary"

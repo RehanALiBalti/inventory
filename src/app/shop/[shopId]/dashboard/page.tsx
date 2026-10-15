@@ -33,12 +33,20 @@ interface DashboardData {
   shopName: string;
   shopStockCount: number;
   warehouseStockCount: number;
+  activityDate?: string;
   todayReceived: number;
   todayTransferred: number;
   todaySold: number;
   lowStockProducts: number;
   lowStockItems?: LowStockItem[];
   linkedWarehouses: number;
+}
+
+function localDateInputValue(date = new Date()) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 export default function ShopDashboardPage() {
@@ -48,14 +56,15 @@ export default function ShopDashboardPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showLowStockList, setShowLowStockList] = useState(false);
+  const [activityDate, setActivityDate] = useState(localDateInputValue);
 
   useEffect(() => {
     loadDashboard();
-  }, [shopId]);
+  }, [shopId, activityDate]);
 
   const loadDashboard = async () => {
     setLoading(true);
-    const res = await apiFetch<DashboardData>(`/api/dashboard?shopId=${shopId}`);
+    const res = await apiFetch<DashboardData>(`/api/dashboard?shopId=${shopId}&date=${activityDate}`);
     if (res.success && res.data) {
       setData(res.data);
     } else {
@@ -64,7 +73,12 @@ export default function ShopDashboardPage() {
     setLoading(false);
   };
 
-  if (loading) {
+  const isToday = activityDate === localDateInputValue();
+  const activityLabel = isToday
+    ? 'Today'
+    : new Date(`${activityDate}T12:00:00`).toLocaleDateString([], { dateStyle: 'medium' });
+
+  if (loading && !data) {
     return (
       <div>
         <PageHeader title="Dashboard" />
@@ -73,7 +87,7 @@ export default function ShopDashboardPage() {
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
       <div>
         <PageHeader title="Dashboard" />
@@ -88,8 +102,24 @@ export default function ShopDashboardPage() {
     <div className="animate-fade-in space-y-6">
       <PageHeader
         title={`${data.shopName} Dashboard`}
-        description="Overview of today's inventory activity"
+        description={`Activity for ${activityLabel}. Stock totals stay current.`}
+        actions={
+          <label className="flex items-center gap-2 bg-white border border-surface-200 rounded-xl px-3 py-2 shadow-sm">
+            <span className="text-xs font-medium text-surface-500">Date</span>
+            <input
+              type="date"
+              value={activityDate}
+              max={localDateInputValue()}
+              onChange={(e) => {
+                if (e.target.value) setActivityDate(e.target.value);
+              }}
+              className="text-sm font-semibold bg-transparent text-surface-800 outline-none"
+            />
+          </label>
+        }
       />
+      {error && <Alert variant="error" onDismiss={() => setError(null)}>{error}</Alert>}
+      {loading && <LoadingSpinner className="py-2" />}
 
       {/* 🚨 Smart Low-Stock Alert Banner */}
       {data.lowStockProducts > 0 && (
@@ -174,19 +204,19 @@ export default function ShopDashboardPage() {
           icon={Icons.warehouse}
         />
         <StatCard
-          label="Received Today"
+          label={`Received ${activityLabel}`}
           value={data.todayReceived.toLocaleString()}
           sublabel="Units added to linked warehouse(s)"
           icon={Icons.received}
         />
         <StatCard
-          label="Transferred Today"
+          label={`Transferred ${activityLabel}`}
           value={data.todayTransferred.toLocaleString()}
           sublabel={`Into ${data.shopName}`}
           icon={Icons.transfer}
         />
         <StatCard
-          label="Sold Today"
+          label={`Sold ${activityLabel}`}
           value={data.todaySold.toLocaleString()}
           sublabel={`From ${data.shopName}`}
           icon={Icons.sale}
