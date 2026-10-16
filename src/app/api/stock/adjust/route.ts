@@ -64,7 +64,7 @@ function validateAdjustLineItems(items: unknown): AdjustLine[] {
   return validated;
 }
 
-// POST /api/stock/adjust - Correct stock at a shop or warehouse (admin only)
+// POST /api/stock/adjust - Correct shop or warehouse stock (admin only)
 export async function POST(request: NextRequest) {
   try {
     const admin = await requireAdmin(request);
@@ -119,8 +119,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Shop not found or inactive' }, { status: 404 });
     }
     const shopName = shopDoc.data()!.name as string;
-
     let locationName = shopName;
+
     if (locationType === 'shop') {
       if (locationId !== shopId) {
         return NextResponse.json(

@@ -137,6 +137,7 @@ export function AppSidebar({ shopId, shopName }: SidebarProps) {
   const warehouseItems: NavItem[] = [
     { label: 'Warehouse Stock', href: `${shopPrefix}/warehouse-stock`, icon: Icons.warehouse },
     { label: 'Transfers', href: `${shopPrefix}/transfers`, icon: Icons.transfer },
+    { label: 'Stock Control', href: `${shopPrefix}/warehouse-adjustments`, icon: Icons.adjust, adminOnly: true },
     { label: 'Warehouses', href: `${shopPrefix}/warehouses`, icon: Icons.warehouse, adminOnly: true },
   ];
 

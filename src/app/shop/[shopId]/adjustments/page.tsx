@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useEffect, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, usePathname } from 'next/navigation';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
 import { PageHeader } from '@/components/layout/AppLayout';
@@ -70,7 +70,9 @@ type Tab = 'adjust' | 'return' | 'history';
 
 export default function StockControlPage() {
   const params = useParams();
+  const pathname = usePathname();
   const shopId = params.shopId as string;
+  const warehouseSide = pathname.endsWith('/warehouse-adjustments');
   const { userRecord } = useAuth();
   const isAdmin = userRecord?.role === 'admin';
 
@@ -80,8 +82,8 @@ export default function StockControlPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
-  const [locationKey, setLocationKey] = useState(`shop:${shopId}`);
-  const [locationBalances, setLocationBalances] = useState<Balance[]>([]);
+  const [warehouseId, setWarehouseId] = useState('');
+  const [warehouseBalances, setWarehouseBalances] = useState<Balance[]>([]);
   const [adjustSearch, setAdjustSearch] = useState('');
   const [adjustLines, setAdjustLines] = useState<AdjustLine[]>([]);
   const [adjustNotes, setAdjustNotes] = useState('');
@@ -107,11 +109,6 @@ export default function StockControlPage() {
     loadBase();
   }, [shopId, isAdmin]);
 
-  useEffect(() => {
-    if (!isAdmin) return;
-    loadLocationBalances();
-  }, [locationKey, shopId, isAdmin]);
-
   const loadBase = async () => {
     const [prodRes, whRes, shopBalRes] = await Promise.all([
       apiFetch<ProductOption[]>(`/api/products?shopId=${shopId}`),
@@ -121,19 +118,28 @@ export default function StockControlPage() {
     if (prodRes.success && prodRes.data) setProducts(prodRes.data);
     if (whRes.success && whRes.data) {
       setWarehouses(whRes.data);
+      if (whRes.data[0]) {
+        setWarehouseId((current) => current || whRes.data![0].id);
+      }
       if (whRes.data.length === 1) setReturnWarehouse(whRes.data[0].id);
     }
     if (shopBalRes.success && shopBalRes.data) setShopBalances(shopBalRes.data);
   };
 
-  const loadLocationBalances = async () => {
-    const [type, id] = locationKey.split(':');
-    const locationType = type === 'warehouse' ? 'warehouse' : 'shop';
-    const locationId = locationType === 'shop' ? shopId : id;
+  useEffect(() => {
+    if (!isAdmin || !warehouseSide || !warehouseId) return;
+    loadWarehouseBalances();
+  }, [isAdmin, warehouseSide, warehouseId, shopId]);
+
+  useEffect(() => {
+    if (warehouseSide && tab === 'return') setTab('adjust');
+  }, [warehouseSide, tab]);
+
+  const loadWarehouseBalances = async () => {
     const res = await apiFetch<Balance[]>(
-      `/api/stock/balances?shopId=${shopId}&locationId=${locationId}&locationType=${locationType}`
+      `/api/stock/balances?shopId=${shopId}&locationId=${warehouseId}&locationType=warehouse`
     );
-    if (res.success && res.data) setLocationBalances(res.data);
+    if (res.success && res.data) setWarehouseBalances(res.data);
   };
 
   const loadHistory = async () => {
@@ -153,6 +159,9 @@ export default function StockControlPage() {
   const qtyFor = (balances: Balance[], productId: string) =>
     balances.find((b) => b.productId === productId)?.quantity ?? 0;
 
+  const adjustBalances = warehouseSide ? warehouseBalances : shopBalances;
+  const placeLabel = warehouseSide ? 'in warehouse' : 'in shop';
+
   const addAdjustLine = (product: ProductOption) => {
     if (adjustLines.some((line) => line.productId === product.id)) return;
     setAdjustLines([
@@ -163,7 +172,7 @@ export default function StockControlPage() {
         sku: product.sku,
         quantity: 1,
         direction: 'increase',
-        available: qtyFor(locationBalances, product.id),
+        available: qtyFor(adjustBalances, product.id),
       },
     ]);
     setAdjustSearch('');
@@ -185,22 +194,19 @@ export default function StockControlPage() {
   };
 
   const refreshAfterChange = async () => {
-    await Promise.all([loadBase(), loadLocationBalances(), loadHistory()]);
+    await Promise.all([loadBase(), warehouseSide ? loadWarehouseBalances() : Promise.resolve(), loadHistory()]);
   };
 
   const submitAdjust = async () => {
     setAdjusting(true);
     setError(null);
-    const [type, id] = locationKey.split(':');
-    const locationType = type === 'warehouse' ? 'warehouse' : 'shop';
-    const locationId = locationType === 'shop' ? shopId : id;
 
     const res = await apiFetch<{ movementId: string }>('/api/stock/adjust', {
       method: 'POST',
       body: JSON.stringify({
         shopId,
-        locationId,
-        locationType,
+        locationId: warehouseSide ? warehouseId : shopId,
+        locationType: warehouseSide ? 'warehouse' : 'shop',
         requestKey: uuidv4(),
         notes: adjustNotes.trim(),
         lineItems: adjustLines.map((line) => ({
@@ -255,6 +261,10 @@ export default function StockControlPage() {
   };
 
   const openAdjustConfirm = () => {
+    if (warehouseSide && !warehouseId) {
+      setError('Select the warehouse to adjust.');
+      return;
+    }
     if (adjustLines.length === 0) {
       setError('Add at least one product to adjust.');
       return;
@@ -264,7 +274,7 @@ export default function StockControlPage() {
       return;
     }
     for (const line of adjustLines) {
-      const available = qtyFor(locationBalances, line.productId);
+      const available = qtyFor(adjustBalances, line.productId);
       if (line.direction === 'decrease' && line.quantity > available) {
         setError(`${line.productName} only has ${available} on hand. Decrease cannot go below zero.`);
         return;
@@ -305,11 +315,6 @@ export default function StockControlPage() {
       </div>
     );
   }
-
-  const locationOptions = [
-    { value: `shop:${shopId}`, label: 'This shop' },
-    ...warehouses.map((w) => ({ value: `warehouse:${w.id}`, label: w.name })),
-  ];
 
   const adjustMatches = products.filter((p) => {
     const q = adjustSearch.toLowerCase();
@@ -373,17 +378,23 @@ export default function StockControlPage() {
   return (
     <div className="animate-fade-in">
       <PageHeader
-        title="Stock Control"
-        description="Correct quantities, or send shop stock back to a warehouse. Admins only."
+        title={warehouseSide ? 'Warehouse Stock Control' : 'Stock Control'}
+        description={
+          warehouseSide
+            ? 'Correct the quantity stored in a warehouse. Admins only.'
+            : 'Correct shop stock, or send shop stock back to a warehouse. Admins only.'
+        }
       />
 
       <div className="flex flex-wrap gap-2 mb-6">
         <Button variant={tab === 'adjust' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('adjust')}>
           Adjust stock
         </Button>
-        <Button variant={tab === 'return' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('return')}>
-          Return to warehouse
-        </Button>
+        {!warehouseSide && (
+          <Button variant={tab === 'return' ? 'primary' : 'ghost'} size="sm" onClick={() => setTab('return')}>
+            Return to warehouse
+          </Button>
+        )}
         <Button
           variant={tab === 'history' ? 'primary' : 'ghost'}
           size="sm"
@@ -399,20 +410,37 @@ export default function StockControlPage() {
       {tab === 'adjust' && (
         <div className="space-y-6">
           <Card>
-            <Select
-              label="Location"
-              value={locationKey}
-              onChange={(e) => {
-                setLocationKey(e.target.value);
-                setAdjustLines([]);
-              }}
-              options={locationOptions}
-            />
+            {warehouseSide ? (
+              <Select
+                label="Warehouse"
+                value={warehouseId}
+                onChange={(e) => {
+                  setWarehouseId(e.target.value);
+                  setAdjustLines([]);
+                }}
+                options={warehouses.map((w) => ({ value: w.id, label: w.name }))}
+                placeholder="Select warehouse"
+              />
+            ) : (
+              <p className="text-sm text-surface-700">
+                Adjustments change this shop&apos;s stock only.
+              </p>
+            )}
             <p className="text-xs text-surface-400 mt-3">
-              An adjustment changes the count in place. It does not move stock between the shop and a warehouse.
+              {warehouseSide
+                ? 'This changes the warehouse count in place. It does not move stock into the shop.'
+                : 'This changes the shop count in place. Use Return to warehouse to move units out of the shop.'}
             </p>
           </Card>
 
+          {warehouseSide && warehouses.length === 0 && (
+            <Card>
+              <p className="text-sm text-surface-600">This shop has no warehouse yet. Add one under Warehouses first.</p>
+            </Card>
+          )}
+
+          {(!warehouseSide || warehouseId) && (
+          <>
           <Card>
             <h3 className="text-sm font-medium text-surface-700 mb-3">Add products</h3>
             <SearchInput value={adjustSearch} onChange={setAdjustSearch} placeholder="Search products..." />
@@ -425,7 +453,7 @@ export default function StockControlPage() {
                     className="w-full px-3 py-2 text-left hover:bg-white flex items-center justify-between text-sm"
                   >
                     <span className="text-surface-800">{p.name}</span>
-                    <span className="text-xs text-surface-400">{qtyFor(locationBalances, p.id)} on hand</span>
+                    <span className="text-xs text-surface-400">{qtyFor(adjustBalances, p.id)} {placeLabel}</span>
                   </button>
                 ))}
                 {adjustMatches.length === 0 && (
@@ -440,12 +468,12 @@ export default function StockControlPage() {
               <h3 className="text-sm font-medium text-surface-700 mb-3">Adjustment</h3>
               <div className="space-y-3">
                 {adjustLines.map((line, idx) => {
-                  const available = qtyFor(locationBalances, line.productId);
+                  const available = qtyFor(adjustBalances, line.productId);
                   return (
                     <div key={line.productId} className="flex flex-col sm:flex-row sm:items-center gap-3 p-3 bg-surface-50 rounded-xl">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-surface-900 truncate">{line.productName}</p>
-                        <p className="text-xs text-surface-400">On hand: {available}</p>
+                        <p className="text-xs text-surface-400">{warehouseSide ? 'In warehouse' : 'In shop'}: {available}</p>
                       </div>
                       <Select
                         value={line.direction}
@@ -489,10 +517,12 @@ export default function StockControlPage() {
               </div>
             </Card>
           )}
+          </>
+          )}
         </div>
       )}
 
-      {tab === 'return' && (
+      {tab === 'return' && !warehouseSide && (
         <div className="space-y-6">
           <Card>
             <Select
@@ -605,7 +635,11 @@ export default function StockControlPage() {
         onCancel={() => setAdjustConfirm(false)}
         onConfirm={submitAdjust}
         title="Confirm adjustment"
-        message={`Update ${adjustLines.length} product(s) at this location? The reason will be stored on the ledger.`}
+        message={
+          warehouseSide
+            ? `Update ${adjustLines.length} product(s) in this warehouse? Shop stock stays unchanged.`
+            : `Update ${adjustLines.length} product(s) in this shop? Warehouse stock stays unchanged.`
+        }
         confirmLabel="Save adjustment"
         loading={adjusting}
       />
