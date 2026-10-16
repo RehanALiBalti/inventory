@@ -276,6 +276,8 @@ interface ModalProps {
   title?: string;
   children: React.ReactNode;
   maxWidth?: 'sm' | 'md' | 'lg' | 'xl';
+  /** Keep the dialog inside the screen. The caller scrolls its own content. */
+  fitViewport?: boolean;
 }
 
 const maxWidthClasses = {
@@ -285,7 +287,7 @@ const maxWidthClasses = {
   xl: 'max-w-xl',
 };
 
-export function Modal({ open, onClose, title, children, maxWidth = 'md' }: ModalProps) {
+export function Modal({ open, onClose, title, children, maxWidth = 'md', fitViewport = false }: ModalProps) {
   if (!open) return null;
 
   return (
@@ -298,10 +300,11 @@ export function Modal({ open, onClose, title, children, maxWidth = 'md' }: Modal
         className={`
           relative w-full ${maxWidthClasses[maxWidth]} glass-card p-6 animate-slide-up
           shadow-2xl shadow-surface-200/50
+          ${fitViewport ? 'max-h-[calc(100vh-2rem)] flex flex-col overflow-hidden' : ''}
         `}
       >
         {title && (
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 shrink-0">
             <h3 className="text-lg font-semibold text-surface-900">{title}</h3>
             <button
               onClick={onClose}
@@ -314,7 +317,11 @@ export function Modal({ open, onClose, title, children, maxWidth = 'md' }: Modal
             </button>
           </div>
         )}
-        {children}
+        {fitViewport ? (
+          <div className="min-h-0 flex-1 flex flex-col overflow-hidden">{children}</div>
+        ) : (
+          children
+        )}
       </div>
     </div>
   );

@@ -79,24 +79,38 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ success: false, error: 'Cannot reverse a reversal' }, { status: 400 });
     }
 
-    // Execute reversal in a transaction. All balance reads happen before any writes.
-    const reversalId = await adminDb.runTransaction(async (txn) => {
-      const reversalRef = adminDb.collection('stockMovements').doc();
-      const items = original.lineItems || [];
+    // A transfer with many products reads and writes two balances per line.
+    // Firestore allows 500 documents in one transaction, so large reversals
+    // are applied in chunks. Progress is stored so a retry continues instead of doubling.
+    const reversalRef = adminDb.collection('stockMovements').doc();
+    const items = original.lineItems || [];
+    const CHUNK = 80;
 
-      type Touch = {
-        ref: FirebaseFirestore.DocumentReference;
-        itemIndex: number;
-        side: 'source' | 'dest' | 'adjust';
-        delta: number;
-        locationId: string;
-        locationName: string;
-        locationType: string;
-        productId: string;
-        productName: string;
-      };
+    type Touch = {
+      ref: FirebaseFirestore.DocumentReference;
+      itemIndex: number;
+      side: 'source' | 'dest' | 'adjust';
+      delta: number;
+      locationId: string;
+      locationName: string;
+      locationType: string;
+      productId: string;
+      productName: string;
+    };
 
-      const touches: Touch[] = [];
+    type ReversalLine = {
+      productId: string;
+      productName: string;
+      productSku: string;
+      quantity: number;
+      direction?: 'increase' | 'decrease';
+      sourceBalanceBefore?: number;
+      sourceBalanceAfter?: number;
+      destBalanceBefore?: number;
+      destBalanceAfter?: number;
+    };
+
+    const touches: Touch[] = [];
 
       if (original.type === 'adjustment') {
         const locationId = original.sourceLocationId as string;
@@ -147,82 +161,89 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const snaps = await Promise.all(touches.map((touch) => txn.get(touch.ref)));
+    const reversalByIndex: Record<number, ReversalLine> = {};
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const line: ReversalLine = {
+        productId: item.productId,
+        productName: item.productName,
+        productSku: item.productSku || '',
+        quantity: item.quantity,
+      };
+      if (item.direction === 'increase') line.direction = 'decrease';
+      else if (item.direction === 'decrease') line.direction = 'increase';
+      reversalByIndex[i] = line;
+    }
 
-      const reversalByIndex: Record<number, {
-        productId: string;
-        productName: string;
-        productSku: string;
-        quantity: number;
-        direction?: 'increase' | 'decrease';
-        sourceBalanceBefore?: number;
-        sourceBalanceAfter?: number;
-        destBalanceBefore?: number;
-        destBalanceAfter?: number;
-      }> = {};
+    const originalRef = adminDb.collection('stockMovements').doc(movementId);
 
-      for (let i = 0; i < items.length; i++) {
-        const item = items[i];
-        reversalByIndex[i] = {
-          productId: item.productId,
-          productName: item.productName,
-          productSku: item.productSku,
-          quantity: item.quantity,
-          direction: item.direction === 'increase'
-            ? 'decrease'
-            : item.direction === 'decrease'
-              ? 'increase'
-              : undefined,
-        };
+    const applyChunk = async (start: number) => {
+      await adminDb.runTransaction(async (txn) => {
+        const fresh = await txn.get(originalRef);
+        if (!fresh.exists) throw new Error('Cannot reverse: original movement disappeared.');
+        const freshData = fresh.data()!;
+        if (freshData.reversed) return;
+        const progress = Number(freshData.reversalApplied) || 0;
+        if (progress >= items.length) return;
+        const from = Math.max(progress, start);
+        const to = Math.min(from + CHUNK, items.length);
+        if (from >= to) return;
+
+        const sliceTouches = touches.filter((touch) => touch.itemIndex >= from && touch.itemIndex < to);
+        const snaps = await Promise.all(sliceTouches.map((touch) => txn.get(touch.ref)));
+
+        for (let i = 0; i < sliceTouches.length; i++) {
+          const touch = sliceTouches[i];
+          const snap = snaps[i];
+          const current = snap.exists ? Number(snap.data()!.quantity) || 0 : 0;
+          const next = current + touch.delta;
+
+          if (snap.exists) {
+            txn.update(touch.ref, { quantity: next, updatedAt: FieldValue.serverTimestamp() });
+          } else {
+            txn.set(touch.ref, {
+              productId: touch.productId,
+              productName: touch.productName,
+              locationId: touch.locationId,
+              locationName: touch.locationName,
+              locationType: touch.locationType,
+              shopId: original.shopId || null,
+              quantity: next,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
+
+          const line = reversalByIndex[touch.itemIndex];
+          if (touch.side === 'dest') {
+            line.destBalanceBefore = current;
+            line.destBalanceAfter = next;
+          } else {
+            line.sourceBalanceBefore = current;
+            line.sourceBalanceAfter = next;
+          }
+        }
+
+        txn.update(originalRef, { reversalApplied: to });
+      });
+    };
+
+    for (let start = Number(original.reversalApplied) || 0; start < items.length; start += CHUNK) {
+      await applyChunk(start);
+    }
+
+    const reversalLineItems = items.map((_: unknown, index: number) => reversalByIndex[index]);
+
+    const reversalId = await adminDb.runTransaction(async (txn) => {
+      const fresh = await txn.get(originalRef);
+      const freshData = fresh.data() || {};
+      if (freshData.reversed && freshData.reversalMovementId) {
+        return freshData.reversalMovementId as string;
       }
 
-      for (let i = 0; i < touches.length; i++) {
-        const touch = touches[i];
-        const snap = snaps[i];
-        const current = snap.exists ? Number(snap.data()!.quantity) || 0 : 0;
-        const next = current + touch.delta;
-
-        if (touch.side === 'dest' && next < 0) {
-          throw new Error(
-            `Cannot reverse: ${touch.productName} at ${touch.locationName} has ${current} units, ` +
-            `but reversal requires ${Math.abs(touch.delta)}. Some stock may have already been sold or transferred.`
-          );
-        }
-
-        if (snap.exists) {
-          txn.update(touch.ref, { quantity: next, updatedAt: FieldValue.serverTimestamp() });
-        } else if (touch.side === 'dest') {
-          throw new Error(`Cannot reverse: ${touch.productName} has no balance at ${touch.locationName}.`);
-        } else {
-          txn.set(touch.ref, {
-            productId: touch.productId,
-            productName: touch.productName,
-            locationId: touch.locationId,
-            locationName: touch.locationName,
-            locationType: touch.locationType,
-            shopId: original.shopId || null,
-            quantity: next,
-            updatedAt: FieldValue.serverTimestamp(),
-          });
-        }
-
-        const line = reversalByIndex[touch.itemIndex];
-        if (touch.side === 'dest') {
-          line.destBalanceBefore = current;
-          line.destBalanceAfter = next;
-        } else {
-          line.sourceBalanceBefore = current;
-          line.sourceBalanceAfter = next;
-        }
-      }
-
-      const reversalLineItems = items.map((_: unknown, index: number) => reversalByIndex[index]);
-
-      // Mark original as reversed
-      const originalRef = adminDb.collection('stockMovements').doc(movementId);
       txn.update(originalRef, {
         reversed: true,
         reversalMovementId: reversalRef.id,
+        reversalApplied: FieldValue.delete(),
       });
 
       // Create reversal movement
