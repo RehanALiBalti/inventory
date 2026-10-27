@@ -273,13 +273,6 @@ export default function StockControlPage() {
       setError('A reason is required for every stock adjustment.');
       return;
     }
-    for (const line of adjustLines) {
-      const available = qtyFor(adjustBalances, line.productId);
-      if (line.direction === 'decrease' && line.quantity > available) {
-        setError(`${line.productName} only has ${available} on hand. Decrease cannot go below zero.`);
-        return;
-      }
-    }
     setError(null);
     setAdjustConfirm(true);
   };
@@ -428,8 +421,8 @@ export default function StockControlPage() {
             )}
             <p className="text-xs text-surface-400 mt-3">
               {warehouseSide
-                ? 'This changes the warehouse count in place. It does not move stock into the shop.'
-                : 'This changes the shop count in place. Use Return to warehouse to move units out of the shop.'}
+                ? 'This changes the warehouse count in place. A decrease can take it below zero. It does not move stock into the shop.'
+                : 'This changes the shop count in place. A decrease can take it below zero. Use Return to warehouse to move units out of the shop.'}
             </p>
           </Card>
 

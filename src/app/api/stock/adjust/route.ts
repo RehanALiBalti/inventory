@@ -170,12 +170,6 @@ export async function POST(request: NextRequest) {
         const delta = item.direction === 'increase' ? item.quantity : -item.quantity;
         const newQty = currentQty + delta;
 
-        if (newQty < 0) {
-          throw new Error(
-            `Insufficient stock for ${productData.name}: available ${currentQty}, adjustment removes ${item.quantity}`
-          );
-        }
-
         if (balanceDoc.exists) {
           txn.update(balanceRef, {
             quantity: newQty,
